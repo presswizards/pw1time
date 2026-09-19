@@ -23,7 +23,7 @@ Page filenames default to this project's (`pwcreate.php` / `pw1time.php`);
 override for other deployments:
 
 ```bash
-python3 tests/e2e.py https://example.com --create wdscreate.php --reveal wdscare.php
+python3 tests/e2e.py https://example.com --create mycreate.php --reveal myreveal.php
 ```
 
 Exit code is 0 when all checks pass, 1 otherwise. Never bakes in a

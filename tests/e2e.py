@@ -8,7 +8,7 @@ a missing/wrong key or failed authentication never burns the record.
 Usage:
     python3 tests/e2e.py https://example.com
     E2E_BASE_URL=https://example.com python3 tests/e2e.py
-    python3 tests/e2e.py https://example.com --create wdscreate.php --reveal wdscare.php
+    python3 tests/e2e.py https://example.com --create mycreate.php --reveal myreveal.php
 
 The test creates one throwaway secret and consumes it, leaving the vault
 exactly as it found it. Requires: python3 + cryptography package.
