@@ -579,7 +579,7 @@ body {
 }
 
 .modal {
-    width: min(440px, calc(100% - 40px));
+    width: min(620px, calc(100% - 40px));
     padding: 42px;
     text-align: center;
     background: rgba(15,20,27,.96);

@@ -397,7 +397,7 @@ body {
 }
 
 .modal {
-    width: min(440px, calc(100% - 40px));
+    width: min(620px, calc(100% - 40px));
     padding: 42px;
     text-align: center;
     background: rgba(15,20,27,.96);
@@ -579,6 +579,12 @@ button:disabled {
     margin-top: 24px;
     padding-top: 24px;
     border-top: 1px solid #27313d;
+    animation: resultIn .3s ease-out;
+}
+
+@keyframes resultIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .gen-label {
@@ -691,6 +697,7 @@ button:disabled {
         <div class="status">NEW SECRET</div>
     </div>
 
+    <div id="create-block">
     <h2>Add to Vault</h2>
 
     <p>
@@ -704,8 +711,8 @@ button:disabled {
         <input type="text" name="company" id="company" class="company" tabindex="-1" autocomplete="off" aria-hidden="true">
         <textarea name="value" id="secret-input" placeholder="Secret value to store ..." autofocus required></textarea>
         <button type="submit" id="submit-btn">Add To Vault</button>
-        <button type="button" id="generate-btn" class="secondary">Auto-Generate Password + Link</button>
     </form>
+    </div>
 
     <div id="generated-result" style="display:none">
         <p class="gen-label">GENERATED PASSWORD</p>
@@ -743,9 +750,10 @@ button:disabled {
         </div>
 
         <div class="done" id="gen-done"></div>
-
-        <button type="button" id="gen-again" class="linklike">Generate another password</button>
     </div>
+
+    <button type="button" id="generate-btn" class="secondary">Auto-Generate Password + Link</button>
+    <button type="button" id="gen-back" class="linklike" style="display:none">&lt; Back</button>
 
     <noscript><p class="form-hint">JavaScript is required: secrets are encrypted in your browser before sending.</p></noscript>
 
@@ -768,6 +776,8 @@ button:disabled {
         const input = document.getElementById('secret-input');
         const btn = document.getElementById('submit-btn');
         const genBtn = document.getElementById('generate-btn');
+        const backBtn = document.getElementById('gen-back');
+        const createBlock = document.getElementById('create-block');
         const resultBox = document.getElementById('generated-result');
         const genPassEl = document.getElementById('gen-password');
         const genLinkEl = document.getElementById('gen-link');
@@ -944,16 +954,28 @@ button:disabled {
             copyText(generatedLink, 'Link copied to clipboard');
         });
 
-        document.getElementById('gen-again').addEventListener('click', function () {
+        /* < Back: clear the generated output and restore the form. */
+        backBtn.addEventListener('click', function () {
             generatedPassword = '';
             generatedLink = '';
+            genPassEl.textContent = '';
+            genLinkEl.textContent = '';
+            genDoneEl.textContent = '';
+            clearError();
             resultBox.style.display = 'none';
+            backBtn.style.display = 'none';
+            createBlock.style.display = 'block';
             genBtn.disabled = false;
             genBtn.textContent = 'Auto-Generate Password + Link';
+            createBlock.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
 
-        /* Generator flow: password lives in memory, is encrypted like any
-         * secret, and both it and its link are shown inline afterwards. */
+        /*
+         * Generator flow: the password lives in memory only, is
+         * encrypted like any secret, and then takes over the card --
+         * the form hides, the password + link show with copy buttons,
+         * and < Back restores the form.
+         */
         genBtn.addEventListener('click', async function () {
             clearError();
 
@@ -965,6 +987,7 @@ button:disabled {
             genBtn.disabled = true;
             genBtn.textContent = 'Generating…';
             resultBox.style.display = 'none';
+            backBtn.style.display = 'none';
 
             let password;
             try {
@@ -996,7 +1019,10 @@ button:disabled {
             generatedLink = REVEAL_BASE + stored.key + '#' + stored.frag;
             genPassEl.textContent = generatedPassword;
             genLinkEl.textContent = generatedLink;
+            createBlock.style.display = 'none';
             resultBox.style.display = 'block';
+            backBtn.style.display = 'block';
+            genBtn.disabled = false;
             genBtn.textContent = 'Auto-Generate Password + Link';
 
             try {
@@ -1006,7 +1032,7 @@ button:disabled {
                 flashGen('Use the Copy buttons to copy the password and link');
             }
 
-            resultBox.scrollIntoView({ block: 'nearest' });
+            resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
     })();
     </script>
