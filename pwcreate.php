@@ -355,6 +355,16 @@ function renderForm(string $error): string
         $errorBlock = '<div class="error">' . $error . '</div>';
     }
 
+    /*
+     * Base of the share link (key id + fragment are appended in the
+     * browser). Used by the password generator to display the full
+     * one-time link inline without a page navigation.
+     */
+    $jsRevealBase = json_encode(
+        baseUrl() . '/pw1time.php?key=',
+        JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+    );
+
     return <<<HTML
 <!doctype html>
 <html lang="en">
@@ -471,6 +481,19 @@ button:hover {
     box-shadow: 0 0 25px rgba(44,255,198,.22);
 }
 
+button.secondary {
+    background: transparent;
+    border: 1px solid #2cffc6;
+    color: #2cffc6;
+    box-shadow: none;
+}
+
+button.secondary:hover {
+    background: rgba(44,255,198,.12);
+    box-shadow: none;
+    transform: translateY(-1px);
+}
+
 button:disabled {
     opacity: .55;
     cursor: wait;
@@ -545,6 +568,100 @@ button:disabled {
     display: block;
 }
 
+#generated-result {
+    margin-top: 24px;
+    padding-top: 24px;
+    border-top: 1px solid #27313d;
+}
+
+.gen-label {
+    margin: 0 0 8px;
+    color: #8d98a8;
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-align: center;
+}
+
+.link-box {
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+    padding: 12px 14px;
+    background: #090d12;
+    border: 1px solid #26343b;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.link {
+    width: 100%;
+    color: #2cffc6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    text-shadow: 0 0 12px rgba(44,255,198,.25);
+}
+
+.copy-row {
+    margin-top: 12px;
+    display: flex;
+    justify-content: center;
+}
+
+.copy-row + .gen-label {
+    margin-top: 20px;
+}
+
+.copy {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 12px;
+    border: 1px solid #2cffc6;
+    border-radius: 7px;
+    background: transparent;
+    color: #2cffc6;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.copy:hover {
+    background: #2cffc6;
+    color: #07110e;
+}
+
+.done {
+    margin: 14px 0 0;
+    color: #2cffc6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-align: center;
+}
+
+.linklike {
+    margin-top: 14px;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: #56616f;
+    font-size: 12px;
+    font-weight: 400;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.linklike:hover {
+    color: #8d98a8;
+    transform: none;
+    box-shadow: none;
+}
+
 .company {
     position: absolute;
     left: -9999px;
@@ -579,7 +696,48 @@ button:disabled {
         <input type="text" name="company" id="company" class="company" tabindex="-1" autocomplete="off" aria-hidden="true">
         <textarea name="value" id="secret-input" placeholder="Secret value to store ..." autofocus required></textarea>
         <button type="submit" id="submit-btn">Add To Vault</button>
+        <button type="button" id="generate-btn" class="secondary">Auto-Generate Password + Link</button>
     </form>
+
+    <div id="generated-result" style="display:none">
+        <p class="gen-label">GENERATED PASSWORD</p>
+        <div class="link-box">
+            <div class="link" id="gen-password"></div>
+        </div>
+        <div class="copy-row">
+            <button class="copy" id="copy-password" type="button" title="Copy password">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round"
+                     style="display:block;">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                Copy
+            </button>
+        </div>
+
+        <p class="gen-label">ONE-TIME SHARE LINK</p>
+        <div class="link-box">
+            <div class="link" id="gen-link"></div>
+        </div>
+        <div class="copy-row">
+            <button class="copy" id="copy-link" type="button" title="Copy link">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round"
+                     style="display:block;">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                Copy
+            </button>
+        </div>
+
+        <div class="done" id="gen-done"></div>
+
+        <button type="button" id="gen-again" class="linklike">Generate another password</button>
+    </div>
 
     <noscript><p class="form-hint">JavaScript is required: secrets are encrypted in your browser before sending.</p></noscript>
 
@@ -589,17 +747,36 @@ button:disabled {
 
     <script>
     /*
-     * Zero-knowledge creation: the secret is encrypted in this browser
+     * Zero-knowledge creation: secrets are encrypted in this browser
      * with AES-256-GCM before anything leaves the page. The server only
-     * ever receives ciphertext + IV. The encryption key never leaves
-     * this browser -- it travels in the link fragment (#...), which
-     * browsers never send to the server, and it is never stored in
-     * cookies, localStorage, or sessionStorage.
+     * ever receives ciphertext + IV. Encryption keys never leave
+     * this browser -- they travel in link fragments (#...), which
+     * browsers never send to the server, and they are never stored in
+     * cookies, localStorage, or sessionStorage. Plaintext lives only
+     * in this script's memory and is never submitted to PHP.
      */
     (function () {
         const form = document.getElementById('vault-form');
         const input = document.getElementById('secret-input');
         const btn = document.getElementById('submit-btn');
+        const genBtn = document.getElementById('generate-btn');
+        const resultBox = document.getElementById('generated-result');
+        const genPassEl = document.getElementById('gen-password');
+        const genLinkEl = document.getElementById('gen-link');
+        const genDoneEl = document.getElementById('gen-done');
+
+        const REVEAL_BASE = {$jsRevealBase};
+
+        /* Unambiguous alphabet: no 0/O, 1/l/I. */
+        const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+        const LOWER = 'abcdefghijkmnopqrstuvwxyz';
+        const DIGITS = '23456789';
+        const SYMBOLS = '!@#$%^&*-_=+?';
+        const ALL = UPPER + LOWER + DIGITS + SYMBOLS;
+
+        function cryptoOk() {
+            return !!(window.crypto && window.crypto.subtle && window.crypto.getRandomValues);
+        }
 
         function b64urlEncode(buf) {
             const bytes = new Uint8Array(buf);
@@ -621,18 +798,95 @@ button:disabled {
             box.textContent = msg;
             btn.disabled = false;
             btn.textContent = 'Add To Vault';
+            genBtn.disabled = false;
+            genBtn.textContent = 'Auto-Generate Password + Link';
         }
 
+        function clearError() {
+            const box = document.getElementById('client-error');
+            if (box) {
+                box.remove();
+            }
+        }
+
+        /* Unbiased random index in [0, n) via rejection sampling. */
+        function randIndex(n) {
+            const limit = 256 - (256 % n);
+            const buf = new Uint8Array(1);
+            while (true) {
+                window.crypto.getRandomValues(buf);
+                if (buf[0] < limit) {
+                    return buf[0] % n;
+                }
+            }
+        }
+
+        function generatePassword() {
+            const chars = [
+                UPPER[randIndex(UPPER.length)],
+                LOWER[randIndex(LOWER.length)],
+                DIGITS[randIndex(DIGITS.length)],
+                SYMBOLS[randIndex(SYMBOLS.length)]
+            ];
+            for (let i = 4; i < 32; i++) {
+                chars.push(ALL[randIndex(ALL.length)]);
+            }
+            for (let i = chars.length - 1; i > 0; i--) {
+                const j = randIndex(i + 1);
+                const t = chars[i];
+                chars[i] = chars[j];
+                chars[j] = t;
+            }
+            return chars.join('');
+        }
+
+        /*
+         * Encrypt + store. Resolves {key, frag}; rejects with a reason.
+         * Sends ciphertext + IV only -- never plaintext, never the key.
+         */
+        async function storeEncrypted(plainBytes) {
+            const key = await window.crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 },
+                true,
+                ['encrypt']
+            );
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const ct = await window.crypto.subtle.encrypt(
+                { name: 'AES-GCM', iv: iv },
+                key,
+                plainBytes
+            );
+            const rawKey = await window.crypto.subtle.exportKey('raw', key);
+
+            const body = new URLSearchParams();
+            body.set('enc', b64urlEncode(ct));
+            body.set('iv', b64urlEncode(iv.buffer));
+
+            const res = await fetch('pwcreate.php?action=store', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' },
+                body: body
+            });
+            const data = await res.json().catch(function () { return null; });
+
+            if (!res.ok || !data || data.ok !== true || typeof data.key !== 'string') {
+                throw new Error((data && data.error) ? data.error : ('http-' + res.status));
+            }
+
+            return { key: data.key, frag: b64urlEncode(rawKey) };
+        }
+
+        /* Manual flow: encrypt the textarea, then show the link page. */
         form.addEventListener('submit', async function (ev) {
             ev.preventDefault();
+            clearError();
 
-            if (!window.crypto || !window.crypto.subtle) {
+            if (!cryptoOk()) {
                 showError('Web Crypto is unavailable in this browser, so the secret cannot be encrypted. Nothing was sent.');
                 return;
             }
 
-            const plaintext = input.value;
-            const plainBytes = new TextEncoder().encode(plaintext);
+            const plainBytes = new TextEncoder().encode(input.value);
             if (plainBytes.length === 0 || plainBytes.length > 4000) {
                 showError('Secret must be 1 to 4000 bytes.');
                 return;
@@ -642,41 +896,109 @@ button:disabled {
             btn.textContent = 'Encrypting…';
 
             try {
-                const key = await window.crypto.subtle.generateKey(
-                    { name: 'AES-GCM', length: 256 },
-                    true,
-                    ['encrypt']
-                );
-                const iv = window.crypto.getRandomValues(new Uint8Array(12));
-                const ct = await window.crypto.subtle.encrypt(
-                    { name: 'AES-GCM', iv: iv },
-                    key,
-                    plainBytes
-                );
-                const rawKey = await window.crypto.subtle.exportKey('raw', key);
-
-                const body = new URLSearchParams();
-                body.set('enc', b64urlEncode(ct));
-                body.set('iv', b64urlEncode(iv.buffer));
-
-                const res = await fetch('pwcreate.php?action=store', {
-                    method: 'POST',
-                    headers: { 'Accept': 'application/json' },
-                    body: body
-                });
-                const data = await res.json().catch(function () { return null; });
-
-                if (!res.ok || !data || data.ok !== true || typeof data.key !== 'string') {
-                    const reason = (data && data.error) ? data.error : ('http-' + res.status);
-                    showError('Could not store the secret (' + reason + '). Nothing was stored in plaintext.');
-                    return;
-                }
-
+                const stored = await storeEncrypted(plainBytes);
                 /* Key travels in the fragment: never sent to the server. */
-                window.location.href = 'pwcreate.php?created=' + encodeURIComponent(data.key) + '#' + b64urlEncode(rawKey);
+                window.location.href = 'pwcreate.php?created=' + encodeURIComponent(stored.key) + '#' + stored.frag;
             } catch (err) {
-                showError('Encryption failed. Nothing was sent.');
+                showError('Could not store the secret (' + err.message + '). Nothing was stored in plaintext.');
             }
+        });
+
+        function flashGen(message) {
+            genDoneEl.textContent = message;
+            setTimeout(function () {
+                genDoneEl.textContent = '';
+            }, 3000);
+        }
+
+        async function copyText(text, okMessage) {
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (err) {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+            flashGen(okMessage);
+        }
+
+        let generatedPassword = '';
+        let generatedLink = '';
+
+        document.getElementById('copy-password').addEventListener('click', function () {
+            copyText(generatedPassword, 'Password copied to clipboard');
+        });
+
+        document.getElementById('copy-link').addEventListener('click', function () {
+            copyText(generatedLink, 'Link copied to clipboard');
+        });
+
+        document.getElementById('gen-again').addEventListener('click', function () {
+            generatedPassword = '';
+            generatedLink = '';
+            resultBox.style.display = 'none';
+            genBtn.disabled = false;
+            genBtn.textContent = 'Auto-Generate Password + Link';
+        });
+
+        /* Generator flow: password lives in memory, is encrypted like any
+         * secret, and both it and its link are shown inline afterwards. */
+        genBtn.addEventListener('click', async function () {
+            clearError();
+
+            if (!cryptoOk()) {
+                showError('Web Crypto is unavailable in this browser, so no password can be generated. Nothing was sent.');
+                return;
+            }
+
+            genBtn.disabled = true;
+            genBtn.textContent = 'Generating…';
+            resultBox.style.display = 'none';
+
+            let password;
+            try {
+                password = generatePassword();
+            } catch (err) {
+                showError('Password generation failed. Nothing was sent.');
+                return;
+            }
+
+            genBtn.textContent = 'Encrypting…';
+            let stored;
+            try {
+                stored = await storeEncrypted(new TextEncoder().encode(password));
+            } catch (err) {
+                showError('Could not store the generated password (' + err.message + '). Nothing was stored in plaintext.');
+                return;
+            }
+
+            /*
+             * Consume the one-time link marker (the inline panel shows
+             * the link itself, so the ?created= page is never visited).
+             * Failure here is harmless: the marker is inert.
+             */
+            try {
+                await fetch('pwcreate.php?created=' + encodeURIComponent(stored.key));
+            } catch (err) { /* inert marker on failure */ }
+
+            generatedPassword = password;
+            generatedLink = REVEAL_BASE + stored.key + '#' + stored.frag;
+            genPassEl.textContent = generatedPassword;
+            genLinkEl.textContent = generatedLink;
+            resultBox.style.display = 'block';
+            genBtn.textContent = 'Auto-Generate Password + Link';
+
+            try {
+                await navigator.clipboard.writeText(generatedLink);
+                flashGen('Link copied to your clipboard automatically');
+            } catch (err) {
+                flashGen('Use the Copy buttons to copy the password and link');
+            }
+
+            resultBox.scrollIntoView({ block: 'nearest' });
         });
     })();
     </script>
