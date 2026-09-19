@@ -108,12 +108,9 @@ if (!array_key_exists($key, $data)) {
 $value = entryValue($data[$key]);
 unset($data[$key]);
 
-$newJson = json_encode(
-    $data,
-    JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
-);
+$newJson = encodeVault($data);
 
-if ($newJson === false) {
+if ($newJson === '') {
     flock($fp, LOCK_UN);
     fclose($fp);
     invalid();
@@ -164,6 +161,16 @@ exit;
 /* ----------------------------------------------------------
  * Functions
  * ---------------------------------------------------------- */
+
+function encodeVault(array $data): string
+{
+    $json = json_encode(
+        $data === [] ? (object) [] : $data,
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+    );
+
+    return $json === false ? '' : $json;
+}
 
 function loadJson(string $file): array
 {
@@ -242,12 +249,9 @@ function pruneExpired(string $file, array $data): array
         return $data;
     }
 
-    $newJson = json_encode(
-        $data,
-        JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
-    );
+    $newJson = encodeVault($data);
 
-    if ($newJson !== false) {
+    if ($newJson !== '') {
         rewind($fp);
         ftruncate($fp, 0);
         fwrite($fp, $newJson . PHP_EOL);
