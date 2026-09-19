@@ -771,25 +771,6 @@ button:disabled {
     letter-spacing: 1px;
     text-align: center;
 }
-
-.delete-warning {
-    margin: 16px 0 0;
-    padding: 10px 12px;
-    text-align: center;
-    border: 1px solid #8c6a3f;
-    border-radius: 8px;
-    background: rgba(140,106,63,.12);
-    color: #ffd9a8;
-    font-size: 13px;
-    line-height: 1.5;
-}
-
-.delete-warning button {
-    width: auto;
-    margin-top: 10px;
-    padding: 8px 18px;
-    font-size: 13px;
-}
 </style>
 </head>
 
@@ -844,13 +825,6 @@ button:disabled {
             from the server.
         </p>
 
-        <div class="delete-warning" id="delete-warning" style="display:none">
-            The secret is shown, but the server did not confirm deletion.
-            Treat the link as still live: do not share it.
-            <br>
-            <button type="button" id="retry-delete">Try deleting again</button>
-        </div>
-
         <div class="done" id="done"></div>
     </div>
 </div>
@@ -863,9 +837,11 @@ button:disabled {
  * variable: never sent, never stored.
  *
  * Encrypted records: fetch the ciphertext (read-only, never
- * consumed), decrypt locally, and only then POST the consume
- * request. A missing/wrong key or failed authentication consumes
- * nothing -- the record stays intact for another attempt.
+ * consumed), decrypt locally, POST the consume request, and display
+ * the plaintext only after the server confirms {ok:true}. A
+ * missing/wrong key, failed authentication, or failed consume
+ * consumes and reveals nothing -- the record stays intact for
+ * another attempt.
  * Legacy records: classic reveal POST, unchanged.
  */
 (function () {
@@ -1075,29 +1051,17 @@ button:disabled {
             return;
         }
 
+        /*
+         * The plaintext stays in memory only. It is displayed only
+         * after the server confirms deletion -- if consume fails,
+         * the record is intact and nothing is revealed.
+         */
         btn.textContent = 'Deleting…';
         try {
             await postConsume();
         } catch (err) {
-            /*
-             * The plaintext is already recovered, so show it -- but
-             * warn loudly that the server did not confirm deletion,
-             * with a retry control.
-             */
-            showSecret(plaintext);
-            document.getElementById('secret-notice').style.display = 'none';
-            const warn = document.getElementById('delete-warning');
-            warn.style.display = 'block';
-            document.getElementById('retry-delete').addEventListener('click', async function () {
-                try {
-                    await postConsume();
-                    warn.style.display = 'none';
-                    document.getElementById('secret-notice').style.display = 'block';
-                } catch (retryErr) {
-                    fail('Delete retry failed (' + retryErr.message + '). The link may still be live.', false);
-                    document.getElementById('reveal-error').style.display = 'block';
-                }
-            });
+            fail('Could not delete the secret on the server (' + err.message + '). Nothing was revealed and the record is intact -- you can try again. If the link now reports invalid, a previous attempt already deleted it without displaying.');
+            btn.textContent = 'Reveal Secure Information';
             return;
         }
 
