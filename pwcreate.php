@@ -142,7 +142,7 @@ function baseUrl(): string
     $host = $_SERVER['HTTP_HOST'] ?? '';
 
     if ($host === '' || filter_var($host, FILTER_VALIDATE_IP)) {
-        return 'https://wdscare1time.wdsdns.net';
+        return 'https://pw1time.presswizards.com';
     }
 
     return 'https://' . $host;

@@ -1,11 +1,11 @@
-# Watchdog One-Time Secret Vault
+# PW One-Time Secret Vault
 
 A minimal PHP single-page secret keeper. Two scripts:
 
-- **`wdscreate.php`** — create a secret, get a one-time secure link.
-- **`wdscare.php`** — the recipient opens that link, confirms, and the secret is revealed and permanently destroyed.
+- **`pwcreate.php`** — create a secret, get a one-time secure link.
+- **`pw1time.php`** — the recipient opens that link, confirms, and the secret is revealed and permanently destroyed.
 
-Produces links like `https://wdscare1time.wdsdns.net/wdscare.php?key=<32-hex>`.
+Produces links like `https://pw1time.presswizards.com/pw1time.php?key=<32-hex>`.
 
 ## Features
 
@@ -22,28 +22,28 @@ Produces links like `https://wdscare1time.wdsdns.net/wdscare.php?key=<32-hex>`.
 
 ## How it works
 
-### Create (`wdscreate.php`)
+### Create (`pwcreate.php`)
 
 1. POST the secret value.
-2. `storeValue()` locks `wdscare.json` (exclusive `flock`), purges any entries older than 10 days, rejects the request if the vault is at the 500 cap, then writes `{ "<32-hex-key>": { "value": ..., "ts": <unix-time> } }`.
+2. `storeValue()` locks `pw1time.json` (exclusive `flock`), purges any entries older than 10 days, rejects the request if the vault is at the 500 cap, then writes `{ "<32-hex-key>": { "value": ..., "ts": <unix-time> } }`.
 3. A one-time `.pending/<key>` marker is written.
 4. `303` redirect to `?created=<key>` — the link page consumes the marker and renders the link exactly once; any later visit shows the form again.
 
-### Reveal (`wdscare.php`)
+### Reveal (`pw1time.php`)
 
 5. GET `?key=...` — key regex-checked (`/^[a-f0-9]{32,128}$/i`) against path/URL use, then the vault is read to confirm the key exists. *Not* consumed (email scanners get no side effects).
 6. POST confirmation — the file is locked, expired entries are purged, the entry is removed from the JSON and its value is stashed to `.revealed/<key>`.
 7. `303` redirect to `?key=...&revealed=1` — the stash is read, displayed once via the animation, then deleted. A reload shows "Invalid URL" (HTTP 404).
 
-Concurrency is handled with exclusive file locks; `wdscare.json` must be writable by the PHP-FPM user.
+Concurrency is handled with exclusive file locks; `pw1time.json` must be writable by the PHP-FPM user.
 
 ## Storage, escaping & XSS
 
-- **At rest** — secrets live in a single JSON file (`wdscare.json`), written with `json_encode`. Keys are always 32–128 hex chars validated by regex.
+- **At rest** — secrets live in a single JSON file (`pw1time.json`), written with `json_encode`. Keys are always 32–128 hex chars validated by regex.
 - **Into JavaScript** — the reveal page embeds the value as `json_encode($value, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)`, so `<`, `>`, `&`, `"`, and `'` become `\uXXXX` escapes. A value containing `</script>` cannot break out of the inline script.
 - **Into the DOM** — the revealed value is rendered only via `textContent`, never `innerHTML`, so it is always displayed as plain text, never parsed as HTML.
 - **Never echoed** — the user-supplied value is never interpolated back into any HTML outside the JSON-encoded script context.
-- **File permissions** — PHP scripts are `700 wdscare11:wdscare11`; the vault JSON is `600 wdscare11:wdscare11`; `.pending/` and `.revealed/` are `0700`.
+- **File permissions** — PHP scripts are `700` to the FPM user; the vault JSON is `600` to the FPM user; `.pending/` and `.revealed/` are `0700`.
 
 ## Security headers
 
@@ -67,7 +67,7 @@ Notes:
 
 ## Data model
 
-`wdscare.json` is a flat object keyed by the secret key (32–128 hex chars):
+`pw1time.json` is a flat object keyed by the secret key (32–128 hex chars):
 
 ```json
 {
@@ -82,20 +82,20 @@ Notes:
 - `ts` — unix timestamp of creation; entries older than 10 days (`ENTRY_TTL = 10 * 86400`) are purged.
 - Legacy plain-string values (pre-timestamp format) are still readable and are never treated as expired.
 
-See `wdscare.json.example` for a full example.
+See `pw1time.json.example` for a full example.
 
 ## Limits summarized
 
 | Limit | Value | Where enforced |
 |---|---|---|
-| Secret length | 4000 bytes max | `wdscreate.php` POST handler |
-| Entries | 500 max | `storeValue()` in `wdscreate.php` |
+| Secret length | 4000 bytes max | `pwcreate.php` POST handler |
+| Entries | 500 max | `storeValue()` in `pwcreate.php` |
 | Expiry | 10 days | `ENTRY_TTL` constant, pruned on every create/reveal |
 | Key format | `/^[a-f0-9]{32,128}$/i` | both scripts, before any path/URL use |
 
 ## Deployment summary
 
-- PHP 8.x, PHP-FPM (scripts run as the `wdscare11` user on the Enhance server).
-- Place `wdscare.php`, `wdscreate.php`, and `logo-extra.png` in `public_html/`.
-- Keep `wdscare.json` one level above `public_html/` (path is `dirname(__DIR__) . '/wdscare.json'`), owned by the FPM user, mode `600`.
+- PHP 8.x, PHP-FPM.
+- Place `pw1time.php`, `pwcreate.php`, and `logo-extra.png` in `public_html/`.
+- Keep `pw1time.json` one level above `public_html/` (path is `dirname(__DIR__) . '/pw1time.json'`), owned by the FPM user, mode `600`.
 - Own the `.php` files `700` to the FPM user.
