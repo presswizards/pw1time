@@ -1,0 +1,10 @@
+{
+    "0123456789abcdef0123456789abcdef": {
+        "value": "Example secret value stored in the vault.",
+        "ts": 1789796000
+    },
+    "fedcba9876543210fedcba9876543210": {
+        "value": "FTPS Password: Example-Only-Not-Real!",
+        "ts": 1789796500
+    }
+}
