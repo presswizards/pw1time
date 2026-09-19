@@ -52,7 +52,7 @@ Concurrency is handled with exclusive file locks; `pw1time.json` must be writabl
 Sent on every page:
 
 ```
-Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
 X-Content-Type-Options: nosniff
 Referrer-Policy: no-referrer
 Cache-Control: no-store, no-cache, must-revalidate, max-age=0
