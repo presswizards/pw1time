@@ -604,6 +604,34 @@ body {
     box-shadow: 0 0 25px rgba(44,255,198,.12);
 }
 
+.header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 24px;
+}
+
+.status-dot {
+    width: 9px;
+    height: 9px;
+    background: #2cffc6;
+    border-radius: 50%;
+    box-shadow: 0 0 12px #2cffc6;
+}
+
+.status {
+    color: #2cffc6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    letter-spacing: 1.5px;
+}
+
+.subtitle {
+    margin: 0 0 25px;
+    color: #8995a5;
+    font-size: 14px;
+}
+
 h2 {
     margin: 0 0 10px;
     font-size: 25px;
@@ -779,6 +807,7 @@ button:disabled {
 
 <div class="modal">
 <center><img src="logo-extra.png" height="50" style="max-width:225px;display:block;border:none;margin:0 auto 24px;filter:drop-shadow(1px 0 0 gray) drop-shadow(-1px 0 0 gray) drop-shadow(0 1px 0 gray) drop-shadow(0 -1px 0 gray);" alt="Watchdog Studio"></center><br>
+    <div id="confirm-top">
     <div class="icon">⌁</div>
 
     <h2>Secure Information</h2>
@@ -794,6 +823,20 @@ button:disabled {
     <form method="post" action="?key={$key}" id="reveal-form">
         <button type="submit" id="reveal-btn">Reveal Secure Information</button>
     </form>
+    </div>
+    </div>
+
+    <div id="reveal-top" style="display:none">
+    <div class="header">
+        <div class="status-dot"></div>
+        <div class="status" id="status">DECRYPTING</div>
+    </div>
+
+    <h2>Secure Information</h2>
+
+    <p class="subtitle">
+        One-time secure reveal
+    </p>
     </div>
 
     <p class="error" id="reveal-error" style="display:none"></p>
@@ -875,6 +918,7 @@ button:disabled {
     const display = document.getElementById('secret');
     const copyBtn = document.getElementById('copy');
     const doneEl = document.getElementById('done');
+    const statusEl = document.getElementById('status');
 
     const chars =
         'ABCDEFGHIJKLMNOPQRSTUVWXYZ' +
@@ -907,20 +951,30 @@ button:disabled {
             requestAnimationFrame(animate);
         } else {
             display.textContent = secret;
+            statusEl.textContent = 'DECRYPTED • DESTROYED';
             copyBtn.style.visibility = 'visible';
         }
     }
 
     const btnMarkup = {
-        copy: 'Copy',
-        copied: 'Copied'
+        copy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+            'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+            'stroke-linejoin="round" style="display:block;margin:0 auto;">' +
+            '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>' +
+            '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>' +
+            '</svg> Copy',
+        copied: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+            'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+            'stroke-linejoin="round" style="display:block;margin:0 auto;">' +
+            '<polyline points="20 6 9 17 4 12"></polyline></svg>' +
+            ' Copied'
     };
 
     function flashCopied(message) {
-        copyBtn.textContent = btnMarkup.copied;
+        copyBtn.innerHTML = btnMarkup.copied;
         doneEl.textContent = message;
         setTimeout(function () {
-            copyBtn.textContent = btnMarkup.copy;
+            copyBtn.innerHTML = btnMarkup.copy;
             doneEl.textContent = '';
         }, 3000);
     }
@@ -941,12 +995,11 @@ button:disabled {
 
     function showSecret(plaintext) {
         secret = plaintext;
-        document.getElementById('confirm-block').style.display = 'none';
-        if (keyWarning) {
-            keyWarning.style.display = 'none';
-        }
+        document.getElementById('confirm-top').style.display = 'none';
+        document.getElementById('reveal-top').style.display = 'block';
         errBox.style.display = 'none';
         document.getElementById('secret-block').style.display = 'block';
+        statusEl.textContent = 'DECRYPTING';
         start = performance.now();
         requestAnimationFrame(animate);
     }
