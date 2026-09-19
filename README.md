@@ -34,8 +34,8 @@ Produces links like `https://pw1time.presswizards.com/pw1time.php?key=<32-hex>`.
 ### Reveal (`pw1time.php`, ungated by design)
 
 5. GET `?key=...#...` — the fragment never reaches the server. The confirm page captures it into a JS variable, strips it from the visible URL, and warns if an encrypted record's link arrived without one. Key regex-checked, vault read-only (email-scanner safe).
-6. Reveal click — the browser fetch-POSTs the confirmation (`?action=reveal`), the entry is removed under lock and stashed to `.revealed/<key>` (tagged `ENC1:` envelope for ciphertext, raw text for legacy), and the browser navigates itself to `?key=...&revealed=1#...`, re-attaching the fragment client-side. Plain form POSTs still get the classic 303.
-7. `?revealed=1` — the stash is read, displayed, then deleted. Encrypted stashes are decrypted in-browser (AES-GCM with the fragment key) and animated; legacy stashes render as before. Reload → 404.
+6. Reveal click (encrypted) — the browser fetches the ciphertext (`?action=fetch`, read-only, never consumes), decrypts locally with the fragment key, and only on AES-GCM success POSTs `?action=consume`, which atomically deletes the record and returns `{ok:true}` (no secret content). The plaintext animates inline. Missing/wrong key or failed authentication consumes nothing — the record survives for another attempt.
+7. Reveal click (legacy) — classic POST consumes the entry under lock, stashes to `.revealed/<key>`, and the browser navigates to `?key=...&revealed=1`, which displays once and deletes the stash. Reload → 404. Encrypted records are refused on this path (400), so only the consume endpoint can delete them.
 
 Concurrency is handled with exclusive file locks; `pw1time.json` must be writable by the PHP-FPM user.
 
