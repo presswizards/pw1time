@@ -112,3 +112,21 @@ See `pw1time.json.example` for a full example.
 - Own the `.php` files `700` to the FPM user.
 - If deploying via `git pull` as root, re-apply ownership afterward (`git checkout`/pull recreates files as root, which breaks PHP-FPM with a 500): `chown <fpm-user>:<fpm-user> *.php; chmod 700 *.php`.
 - `tests/` is repo-only tooling and must not be web-accessible: on git-clone deployments exclude it with `git sparse-checkout set --no-cone '/*' '!/tests/'` (future pulls keep working, `tests/` never materializes). Per-file `scp` deploys skip it naturally.
+
+### Cloudflare Security Rules (optional)
+
+If the site sits behind Cloudflare, an optional two-rule setup protects
+creation while keeping reveals frictionless:
+
+1. **Good Bot Skip rule** — skip managed challenges for the reveal page
+   (`pw1time.php`) and the logo (`logo-extra.png`).
+2. **Managed Challenge rule after the Skip rule** — challenge the
+   subdomain. Rule order matters: the Skip rule runs first so reveals
+   render with no challenge, while creation (and everything else) faces
+   the Managed Challenge, adding a bot-mitigation layer in front of the
+   app's own browser gate.
+
+If the reveal URL itself becomes a target, remove it from the Skip rule
+as well so it is challenged too. Note the reveal flow currently does not
+use any built-in browser detection, so recipients never hit challenge
+issues — that may change in the future.
