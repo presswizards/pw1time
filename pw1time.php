@@ -27,9 +27,12 @@ if (!preg_match('/^[a-f0-9]{32,128}$/i', $key)) {
 
 /*
  * GET with revealed=1: the secret was consumed by a POST that redirected
- * here (PRG). The value is stashed on disk so the redirect target can
- * display it without re-submitting anything; it's deleted after display,
- * so a reload shows the form/invalid state instead of a resubmit dialog.
+ * here (PRG, legacy flow). The value is stashed on disk so the redirect
+ * target can display it without re-submitting anything; it's deleted
+ * after display, so a reload shows invalid instead of a resubmit
+ * dialog. Encrypted records no longer use this path (they are
+ * fetched, decrypted, and consumed inline on the confirm page);
+ * the ENC1: branch below only serves stashes predating that change.
  */
 if ($revealed) {
     $stash = $revealDir . '/' . $key;
@@ -65,6 +68,118 @@ if ($revealed) {
 }
 
 /*
+ * GET with action=fetch: return the ciphertext envelope for an
+ * encrypted record WITHOUT consuming it. Read-only by design: the
+ * file is never written here, so scanners, retries, and missing or
+ * wrong keys can never burn the secret. Legacy records are refused
+ * (they keep the normal reveal flow); only {enc, iv} ever leaves.
+ */
+if (($_GET['action'] ?? '') === 'fetch' && $_SERVER['REQUEST_METHOD'] === 'GET') {
+    header('Content-Type: application/json');
+    $data = loadJson($jsonFile);
+
+    if (!array_key_exists($key, $data)) {
+        http_response_code(404);
+        echo json_encode(['ok' => false, 'error' => 'not-found']);
+        exit;
+    }
+
+    $entry = $data[$key];
+    if (isEntryExpired($entry, time())) {
+        http_response_code(404);
+        echo json_encode(['ok' => false, 'error' => 'not-found']);
+        exit;
+    }
+
+    $cipher = entryCipher($entry);
+    if ($cipher === null) {
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'legacy-record']);
+        exit;
+    }
+
+    echo json_encode(['ok' => true, 'enc' => $cipher['enc'], 'iv' => $cipher['iv']]);
+    exit;
+}
+
+/*
+ * POST with action=consume: atomically delete an encrypted record
+ * AFTER the browser has decrypted it locally. Only the key ID is
+ * needed -- and only ever returned -- so this endpoint can neither
+ * expose plaintext nor ciphertext. Legacy records are refused
+ * outright (never deleted here); they keep the normal reveal flow.
+ */
+if (($_GET['action'] ?? '') === 'consume' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+
+    $fp = @fopen($jsonFile, 'c+');
+    if (!$fp || !flock($fp, LOCK_EX)) {
+        if ($fp) {
+            fclose($fp);
+        }
+        http_response_code(503);
+        echo json_encode(['ok' => false, 'error' => 'vault-busy']);
+        exit;
+    }
+
+    rewind($fp);
+    $data = json_decode(stream_get_contents($fp) ?: '{}', true);
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    $now = time();
+    foreach ($data as $existingKey => $existingEntry) {
+        if (isEntryExpired($existingEntry, $now)) {
+            unset($data[$existingKey]);
+        }
+    }
+
+    if (!array_key_exists($key, $data)) {
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        http_response_code(404);
+        echo json_encode(['ok' => false, 'error' => 'not-found']);
+        exit;
+    }
+
+    if (entryCipher($data[$key]) === null) {
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'legacy-record']);
+        exit;
+    }
+
+    unset($data[$key]);
+
+    $newJson = encodeVault($data);
+    if ($newJson === '') {
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'write-failed']);
+        exit;
+    }
+
+    rewind($fp);
+    ftruncate($fp, 0);
+    $writeOk = fwrite($fp, $newJson . PHP_EOL) !== false;
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+
+    if (!$writeOk) {
+        http_response_code(500);
+        echo json_encode(['ok' => false, 'error' => 'write-failed']);
+        exit;
+    }
+
+    echo json_encode(['ok' => true]);
+    exit;
+}
+
+/*
  * GET: Verify key exists, but do not consume it.
  * This prevents email scanners from burning the link.
  * Expired entries are purged and treated as invalid.
@@ -81,9 +196,12 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 /*
- * POST: lock JSON, retrieve value, remove only this key,
- * write the remaining data back, stash the value, and redirect
- * so reloading the revealed page never re-submits the POST.
+ * POST (no action): legacy reveal path -- lock JSON, retrieve value,
+ * remove only this key, write the remaining data back, stash the
+ * value, and redirect so reloading the revealed page never
+ * re-submits the POST. Encrypted records are refused above: they
+ * are deleted only via the explicit consume endpoint, after the
+ * browser decrypts them locally.
  */
 $fp = @fopen($jsonFile, 'c+');
 
@@ -121,17 +239,40 @@ if (!array_key_exists($key, $data)) {
     invalid();
 }
 
-$entry = $data[$key];
-$cipher = entryCipher($entry);
-
 /*
- * Encrypted records stash a tagged envelope for browser-side
- * decryption; legacy records stash plaintext for the original
- * reveal behavior. Existing records are never modified.
+ * Encrypted records must never be consumed here. They are fetched
+ * read-only, decrypted in the browser, and deleted only via the
+ * explicit consume endpoint -- so a missing/wrong key or a
+ * non-JS POST can never burn the secret. Legacy records continue
+ * through the stash + redirect flow below, unchanged.
  */
-$stashPayload = $cipher !== null
-    ? 'ENC1:' . json_encode(['enc' => $cipher['enc'], 'iv' => $cipher['iv']], JSON_UNESCAPED_SLASHES)
-    : entryValue($entry);
+if (entryCipher($data[$key]) !== null) {
+    flock($fp, LOCK_UN);
+    fclose($fp);
+    if (($_GET['action'] ?? '') === 'reveal') {
+        header('Content-Type: application/json');
+        http_response_code(400);
+        echo json_encode(['ok' => false, 'error' => 'encrypted-requires-decrypt-flow']);
+        exit;
+    }
+    http_response_code(400);
+    echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+        . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        . '<title>JavaScript required</title></head>'
+        . '<body style="background:#0b0f14;color:#e8edf2;font-family:system-ui,sans-serif;'
+        . 'display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">'
+        . '<div style="text-align:center;max-width:26rem;padding:2rem">'
+        . '<h1>JavaScript required</h1>'
+        . '<p>This secret is end-to-end encrypted and must be decrypted in your browser before it can be revealed. Nothing was deleted.</p>'
+        . '</div></body></html>';
+    exit;
+}
+
+$entry = $data[$key];
+
+/* Legacy plaintext only (encrypted records exit above): stash the
+ * value for the redirect target, unchanged behavior. */
+$stashPayload = entryValue($entry);
 unset($data[$key]);
 
 $newJson = encodeVault($data);
@@ -397,11 +538,13 @@ function showConfirmation(string $key, bool $isEncrypted): never
         $keyWarning = <<<HTML
     <p class="key-warning" id="key-warning" style="display:none">
         This link is missing its decryption key (the part after #).
-        Revealing now will permanently destroy a secret you cannot read.
-        Ask the sender for the complete link.
+        Ask the sender for the complete link. Nothing will be deleted
+        until the secret is successfully decrypted in your browser.
     </p>
 HTML;
     }
+
+    $jsIsEncrypted = $isEncrypted ? 'true' : 'false';
     echo <<<HTML
 <!doctype html>
 <html lang="en">
@@ -518,6 +661,135 @@ button:disabled {
     font-size: 13px;
     line-height: 1.5;
 }
+
+.secret-box {
+    position: relative;
+    min-height: 80px;
+    display: flex;
+    align-items: center;
+    padding: 18px;
+    background: #090d12;
+    border: 1px solid #26343b;
+    border-radius: 10px;
+    overflow: hidden;
+    margin-top: 20px;
+}
+
+.secret {
+    width: 100%;
+    color: #2cffc6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 15px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-shadow: 0 0 12px rgba(44,255,198,.25);
+}
+
+.secret-error {
+    color: #ffb4a8;
+    text-shadow: none;
+}
+
+.scan {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #2cffc6;
+    box-shadow: 0 0 18px #2cffc6;
+    animation: scan 1.25s ease-in-out forwards;
+}
+
+@keyframes scan {
+    0% { top: 0; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { top: 100%; opacity: 0; }
+}
+
+.progress {
+    height: 2px;
+    margin-top: 15px;
+    background: #182027;
+    overflow: hidden;
+    border-radius: 2px;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0;
+    background: #2cffc6;
+    box-shadow: 0 0 10px rgba(44,255,198,.7);
+    animation: progress 2s ease-out forwards;
+}
+
+@keyframes progress {
+    to { width: 100%; }
+}
+
+.copy-row {
+    margin-top: 16px;
+    display: flex;
+    justify-content: center;
+}
+
+.notice {
+    margin-top: 20px;
+    color: #778391;
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+.copy {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 12px;
+    border: 1px solid #2cffc6;
+    border-radius: 7px;
+    background: transparent;
+    color: #2cffc6;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.copy:hover {
+    background: #2cffc6;
+    color: #07110e;
+}
+
+.done {
+    margin: 18px 0 0;
+    color: #2cffc6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-align: center;
+}
+
+.delete-warning {
+    margin: 16px 0 0;
+    padding: 10px 12px;
+    text-align: center;
+    border: 1px solid #8c6a3f;
+    border-radius: 8px;
+    background: rgba(140,106,63,.12);
+    color: #ffd9a8;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.delete-warning button {
+    width: auto;
+    margin-top: 10px;
+    padding: 8px 18px;
+    font-size: 13px;
+}
 </style>
 </head>
 
@@ -536,23 +808,69 @@ button:disabled {
 
     {$keyWarning}
 
+    <div id="confirm-block">
     <form method="post" action="?key={$key}" id="reveal-form">
         <button type="submit" id="reveal-btn">Reveal Secure Information</button>
     </form>
+    </div>
 
     <p class="error" id="reveal-error" style="display:none"></p>
+
+    <div id="secret-block" style="display:none">
+        <div class="secret-box">
+            <div class="scan"></div>
+            <div class="secret" id="secret"></div>
+        </div>
+
+        <div class="progress">
+            <div class="progress-bar"></div>
+        </div>
+
+        <div class="copy-row">
+            <button class="copy" id="copy" type="button" title="Copy" style="visibility:hidden">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round"
+                     style="display:block;">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                Copy
+            </button>
+        </div>
+
+        <p class="notice" id="secret-notice">
+            This information has been permanently deleted
+            from the server.
+        </p>
+
+        <div class="delete-warning" id="delete-warning" style="display:none">
+            The secret is shown, but the server did not confirm deletion.
+            Treat the link as still live: do not share it.
+            <br>
+            <button type="button" id="retry-delete">Try deleting again</button>
+        </div>
+
+        <div class="done" id="done"></div>
+    </div>
 </div>
 
 <script>
 /*
  * The decryption key lives in the URL fragment (#...), which the
  * browser never sends to the server. Capture it immediately, then
- * strip it from the visible URL. The reveal POST goes out via fetch
- * so this script can re-attach the fragment when navigating to the
- * revealed page -- a plain form POST + server redirect would drop it.
- * The key is kept only in this variable: never sent, never stored.
+ * strip it from the visible URL. The key is kept only in this
+ * variable: never sent, never stored.
+ *
+ * Encrypted records: fetch the ciphertext (read-only, never
+ * consumed), decrypt locally, and only then POST the consume
+ * request. A missing/wrong key or failed authentication consumes
+ * nothing -- the record stays intact for another attempt.
+ * Legacy records: classic reveal POST, unchanged.
  */
 (function () {
+    const IS_ENCRYPTED = {$jsIsEncrypted};
+
     const frag = window.location.hash ? window.location.hash.slice(1) : '';
     try {
         history.replaceState(null, '', location.pathname + location.search);
@@ -562,13 +880,124 @@ button:disabled {
     const btn = document.getElementById('reveal-btn');
     const errBox = document.getElementById('reveal-error');
     const keyWarning = document.getElementById('key-warning');
-    const keyOk = /^[A-Za-z0-9\-_]{43}$/.test(frag);
 
-    if (keyWarning && !keyOk) {
+    if (IS_ENCRYPTED && keyWarning && !/^[A-Za-z0-9\-_]{43}$/.test(frag)) {
         keyWarning.style.display = 'block';
     }
 
-    form.addEventListener('submit', async function (ev) {
+    function fail(msg, enableBtn) {
+        errBox.textContent = msg;
+        errBox.style.display = 'block';
+        if (enableBtn !== false) {
+            btn.disabled = false;
+        }
+    }
+
+    /* ---- shared reveal-animation + copy widgets ---- */
+
+    const display = document.getElementById('secret');
+    const copyBtn = document.getElementById('copy');
+    const doneEl = document.getElementById('done');
+
+    const chars =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZ' +
+        'abcdefghijklmnopqrstuvwxyz' +
+        '0123456789!@#$%^&*';
+
+    const duration = 2000;
+    let secret = '';
+    let start = 0;
+
+    function randomChar() {
+        return chars[Math.floor(Math.random() * chars.length)];
+    }
+
+    function animate(now) {
+        const progress = Math.min((now - start) / duration, 1);
+        const resolved = Math.floor(secret.length * progress);
+        let output = '';
+        for (let i = 0; i < secret.length; i++) {
+            if (secret[i] === '\n') {
+                output += '\n';
+            } else if (i < resolved) {
+                output += secret[i];
+            } else {
+                output += randomChar();
+            }
+        }
+        display.textContent = output;
+        if (progress < 1) {
+            requestAnimationFrame(animate);
+        } else {
+            display.textContent = secret;
+            copyBtn.style.visibility = 'visible';
+        }
+    }
+
+    const btnMarkup = {
+        copy: 'Copy',
+        copied: 'Copied'
+    };
+
+    function flashCopied(message) {
+        copyBtn.textContent = btnMarkup.copied;
+        doneEl.textContent = message;
+        setTimeout(function () {
+            copyBtn.textContent = btnMarkup.copy;
+            doneEl.textContent = '';
+        }, 3000);
+    }
+
+    copyBtn.addEventListener('click', function () {
+        try {
+            navigator.clipboard.writeText(secret);
+        } catch (err) {
+            const ta = document.createElement('textarea');
+            ta.value = secret;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        }
+        flashCopied('Copied to clipboard');
+    });
+
+    function showSecret(plaintext) {
+        secret = plaintext;
+        document.getElementById('confirm-block').style.display = 'none';
+        if (keyWarning) {
+            keyWarning.style.display = 'none';
+        }
+        errBox.style.display = 'none';
+        document.getElementById('secret-block').style.display = 'block';
+        start = performance.now();
+        requestAnimationFrame(animate);
+    }
+
+    function b64urlDecode(s) {
+        const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) {
+            bytes[i] = bin.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
+    async function postConsume() {
+        const res = await fetch('?key={$key}&action=consume', {
+            method: 'POST',
+            headers: { 'Accept': 'application/json' }
+        });
+        const data = await res.json().catch(function () { return null; });
+        if (!res.ok || !data || data.ok !== true) {
+            throw new Error((data && data.error) ? data.error : ('http-' + res.status));
+        }
+    }
+
+    /* ---- legacy path: classic reveal POST, unchanged ---- */
+
+    async function revealLegacy(ev) {
         ev.preventDefault();
         errBox.style.display = 'none';
         btn.disabled = true;
@@ -584,14 +1013,98 @@ button:disabled {
                 throw new Error((data && data.error) ? data.error : ('http-' + res.status));
             }
 
-            /* Re-attach the fragment client-side: the server never sees it. */
             window.location.href = data.goto + (frag ? '#' + frag : '');
         } catch (err) {
-            errBox.textContent = 'Reveal failed (' + err.message + '). You can try again unless the link now reports invalid, which means it was already consumed.';
-            errBox.style.display = 'block';
-            btn.disabled = false;
+            fail('Reveal failed (' + err.message + '). You can try again unless the link now reports invalid, which means it was already consumed.');
         }
-    });
+    }
+
+    /* ---- encrypted path: fetch, decrypt, then consume ---- */
+
+    async function revealEncrypted(ev) {
+        ev.preventDefault();
+        errBox.style.display = 'none';
+        btn.disabled = true;
+
+        if (!window.crypto || !window.crypto.subtle) {
+            fail('Web Crypto is unavailable in this browser, so this secret cannot be decrypted. Nothing was deleted.');
+            return;
+        }
+
+        if (!/^[A-Za-z0-9\-_]{43}$/.test(frag)) {
+            fail('This link is missing its decryption key (the part after #). Nothing was deleted. Ask the sender for the complete link.');
+            return;
+        }
+
+        btn.textContent = 'Fetching…';
+        let envelope;
+        try {
+            const res = await fetch('?key={$key}&action=fetch', {
+                headers: { 'Accept': 'application/json' }
+            });
+            envelope = await res.json().catch(function () { return null; });
+            if (!res.ok || !envelope || envelope.ok !== true
+                || typeof envelope.enc !== 'string' || typeof envelope.iv !== 'string') {
+                throw new Error((envelope && envelope.error) ? envelope.error : ('http-' + res.status));
+            }
+        } catch (err) {
+            fail('Could not retrieve the secret (' + err.message + '). Nothing was deleted; you can try again.');
+            btn.textContent = 'Reveal Secure Information';
+            return;
+        }
+
+        btn.textContent = 'Decrypting…';
+        let plaintext;
+        try {
+            const key = await window.crypto.subtle.importKey(
+                'raw',
+                b64urlDecode(frag),
+                { name: 'AES-GCM' },
+                false,
+                ['decrypt']
+            );
+            const plain = await window.crypto.subtle.decrypt(
+                { name: 'AES-GCM', iv: new Uint8Array(b64urlDecode(envelope.iv)) },
+                key,
+                b64urlDecode(envelope.enc)
+            );
+            plaintext = new TextDecoder().decode(plain);
+        } catch (err) {
+            fail('Decryption failed: the link key does not match this secret, or the data is corrupt. Nothing was deleted -- ask the sender for the complete link.');
+            btn.textContent = 'Reveal Secure Information';
+            return;
+        }
+
+        btn.textContent = 'Deleting…';
+        try {
+            await postConsume();
+        } catch (err) {
+            /*
+             * The plaintext is already recovered, so show it -- but
+             * warn loudly that the server did not confirm deletion,
+             * with a retry control.
+             */
+            showSecret(plaintext);
+            document.getElementById('secret-notice').style.display = 'none';
+            const warn = document.getElementById('delete-warning');
+            warn.style.display = 'block';
+            document.getElementById('retry-delete').addEventListener('click', async function () {
+                try {
+                    await postConsume();
+                    warn.style.display = 'none';
+                    document.getElementById('secret-notice').style.display = 'block';
+                } catch (retryErr) {
+                    fail('Delete retry failed (' + retryErr.message + '). The link may still be live.', false);
+                    document.getElementById('reveal-error').style.display = 'block';
+                }
+            });
+            return;
+        }
+
+        showSecret(plaintext);
+    }
+
+    form.addEventListener('submit', IS_ENCRYPTED ? revealEncrypted : revealLegacy);
 })();
 </script>
 
