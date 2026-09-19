@@ -893,8 +893,8 @@ button:disabled {
         const resolved = Math.floor(secret.length * progress);
         let output = '';
         for (let i = 0; i < secret.length; i++) {
-            if (secret[i] === '\n') {
-                output += '\n';
+            if (secret[i] === '\\n') {
+                output += '\\n';
             } else if (i < resolved) {
                 output += secret[i];
             } else {
