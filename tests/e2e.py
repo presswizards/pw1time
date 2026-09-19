@@ -19,6 +19,8 @@ import base64
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import urllib.request
@@ -79,6 +81,37 @@ def unb64url(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+def check_js(name, html):
+    """Validate RENDERED inline scripts (not PHP source).
+
+    Catches the heredoc-newline class of bug: PHP converts '\\n' inside a
+    double-quoted heredoc to a real newline, so served JS can contain a
+    line break inside a string literal even when the .php source parses
+    cleanly. The signature is a line ending with an opening quote
+    (comparison/append against a split literal). When node exists, also
+    parse every block with node --check.
+    """
+    blocks = re.findall(r"<script>(.*?)</script>", html, re.S)
+    check(f"{name} has inline JS", len(blocks) > 0)
+    for i, b in enumerate(blocks):
+        bad = [ln.strip()[:70] for ln in b.splitlines()
+               if re.search(r"=== ['\"]$", ln.rstrip())
+               or re.search(r"\+= ['\"]$", ln.rstrip())]
+        check(f"{name} script[{i}] no split string literal", not bad, "; ".join(bad))
+    node = shutil.which("node")
+    if not node:
+        print("SKIP node --check (node not installed)")
+        return
+    for i, b in enumerate(blocks):
+        with open(f"/tmp/e2e-js-{os.getpid()}-{i}.js", "w") as f:
+            f.write(b)
+            path = f.name
+        r = subprocess.run([node, "--check", path], capture_output=True, text=True)
+        os.unlink(path)
+        check(f"{name} script[{i}] node --check", r.returncode == 0,
+              r.stderr.strip()[:150])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Zero-knowledge flow regression test.")
     ap.add_argument("base_url", nargs="?", default=os.environ.get("E2E_BASE_URL"),
@@ -113,8 +146,19 @@ def main() -> int:
     check("store ok", s == 200, key)
 
     # --- consume the one-time link-display marker so no trace remains ---
-    s, _, _ = req(base, "GET", f"/{create}?created={key}")
+    s, created_html, _ = req(base, "GET", f"/{create}?created={key}")
     check("link marker consumed", s == 200, s)
+    check_js("created page", created_html)
+
+    # --- confirm page renders while the record exists ---
+    s, confirm_html, _ = req(base, "GET", f"/{reveal}?key={key}")
+    check("confirm 200", s == 200, s)
+    check_js("confirm page", confirm_html)
+
+    # --- form page scripts ---
+    s, form_html, _ = req(base, "GET", f"/{create}")
+    check("form 200", s == 200, s)
+    check_js("form page", form_html)
 
     # --- 1. fetch must NOT consume ---
     s, out, _ = req(base, "GET", f"/{reveal}?key={key}&action=fetch",

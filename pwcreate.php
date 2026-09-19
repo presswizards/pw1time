@@ -518,6 +518,13 @@ button:disabled {
     line-height: 1.5;
 }
 
+.security-info {
+    margin: 14px 0 0;
+    color: #8d98a8;
+    font-size: 12px;
+    text-align: center;
+}
+
 .info-tip {
     display: inline-flex;
     align-items: center;
@@ -616,6 +623,7 @@ button:disabled {
 
 .copy {
     flex-shrink: 0;
+    width: auto;
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -683,7 +691,7 @@ button:disabled {
         <div class="status">NEW SECRET</div>
     </div>
 
-    <h2><span class="info-tip" tabindex="0" aria-label="About this vault's security" data-tip="Secrets are encrypted in your browser with AES-256-GCM before sending, so the server never sees them. Pages are never cached, visitors pass a JavaScript browser check, and bots are blocked by anti-spam controls.">i</span> Add to Vault</h2>
+    <h2>Add to Vault</h2>
 
     <p>
         Enter the secret value to store.
@@ -1009,6 +1017,10 @@ button:disabled {
         Values are stored until their one-time link is revealed, then
         permanently deleted. Unrevealed links expire automatically after
         10 days. Maximum secret size is 4,000 characters.
+    </p>
+
+    <p class="security-info">
+        <span class="info-tip" tabindex="0" aria-label="About this vault's security" data-tip="Secrets are encrypted in your browser with AES-256-GCM before sending, so the server never sees them. Pages are never cached, visitors pass a JavaScript browser check, and bots are blocked by anti-spam controls.">i</span> Security Info
     </p>
 </div>
 

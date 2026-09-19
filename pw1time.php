@@ -741,9 +741,9 @@ button:disabled {
     line-height: 1.5;
     text-align: center;
 }
-
 .copy {
     flex-shrink: 0;
+    width: auto;
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -771,6 +771,7 @@ button:disabled {
     letter-spacing: 1px;
     text-align: center;
 }
+
 </style>
 </head>
 

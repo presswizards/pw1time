@@ -5,6 +5,10 @@ encrypted store, fetch-without-burn, wrong-key survival, plaintext
 rejection, decrypt roundtrip, consume, and double-consume. It creates one
 throwaway secret and consumes it, leaving the vault as it found it.
 
+It also validates served inline JavaScript: every rendered page's scripts
+are checked for split string literals (the PHP-heredoc-newline bug class),
+and fully parsed with `node --check` when node is installed.
+
 Requirements: `python3` + the `cryptography` package
 (`pip install cryptography`).
 
