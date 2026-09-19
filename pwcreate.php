@@ -15,9 +15,62 @@ header('Referrer-Policy: no-referrer');
 
 $jsonFile = dirname(__DIR__) . '/pw1time.json';
 $pendingDir = dirname(__DIR__) . '/.pending';
+$gateSecretFile = dirname(__DIR__) . '/.gate-secret';
 
 const MAX_ENTRIES = 500;
 const ENTRY_TTL = 10 * 86400;
+
+/* ----------------------------------------------------------
+ * Browser gate helpers (challenge issued by index.php)
+ * ---------------------------------------------------------- */
+
+function gateSecret(string $secretFile): string
+{
+    $secret = @is_file($secretFile) ? trim((string) @file_get_contents($secretFile)) : '';
+
+    if ($secret === '') {
+        $fresh = bin2hex(random_bytes(32));
+        $fp = @fopen($secretFile, 'x');
+        if ($fp) {
+            fwrite($fp, $fresh . PHP_EOL);
+            fclose($fp);
+            @chmod($secretFile, 0600);
+        }
+        $secret = @is_file($secretFile) ? trim((string) @file_get_contents($secretFile)) : '';
+    }
+
+    return $secret;
+}
+
+function gateCookieValid(string $secret): bool
+{
+    $raw = (string) ($_COOKIE['browser_verified'] ?? '');
+    $parts = explode('|', $raw, 2);
+    if (count($parts) !== 2 || !ctype_digit($parts[0])) {
+        return false;
+    }
+    $exp = (int) $parts[0];
+    if ($exp <= time()) {
+        return false;
+    }
+    return hash_equals(hash_hmac('sha256', 'verified|' . $exp, $secret), $parts[1]);
+}
+
+/*
+ * Browser verification gate: no valid signed cookie, no creation page.
+ * GETs are sent back to the challenge; POSTs are rejected outright
+ * (a redirect on POST would just bounce bots into a GET loop).
+ */
+$gateSecret = gateSecret($gateSecretFile);
+if ($gateSecret === '' || !gateCookieValid($gateSecret)) {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        http_response_code(403);
+        echo renderForbidden();
+        exit;
+    }
+    header('Location: /index.php', true, 303);
+    exit;
+}
 
 /*
  * POST: store a secret under a freshly generated key, then redirect (PRG)

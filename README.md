@@ -1,9 +1,10 @@
 # PW One-Time Secret Vault
 
-A minimal PHP single-page secret keeper. Two scripts:
+A minimal PHP single-page secret keeper. Three scripts:
 
-- **`pwcreate.php`** — create a secret, get a one-time secure link.
-- **`pw1time.php`** — the recipient opens that link, confirms, and the secret is revealed and permanently destroyed.
+- **`index.php`** — browser verification gate; the public entry point.
+- **`pwcreate.php`** — create a secret, get a one-time secure link (requires passing the gate).
+- **`pw1time.php`** — the recipient opens that link, confirms, and the secret is revealed and permanently destroyed (intentionally ungated so arbitrary email-link recipients can open it).
 
 Produces links like `https://pw1time.presswizards.com/pw1time.php?key=<32-hex>`.
 
@@ -15,6 +16,7 @@ Produces links like `https://pw1time.presswizards.com/pw1time.php?key=<32-hex>`.
 - **4000 character limit** — values longer than 4000 bytes are rejected at creation time.
 - **Email-scanner safe** — a plain GET on a link only shows a confirmation page; it never consumes the secret, so link previews / security scanners can't burn it.
 - **PRG (Post/Redirect/Get)** — the create and reveal flows redirect after POST, so refreshing never re-submits and never shows a browser "resubmit form" prompt.
+- **Browser verification gate** — `index.php` issues a stateless HMAC-signed challenge (token + 5-min expiry) that real-browser JS submits after capability checks (DOM, Web Crypto, cookies, screen) and a ~1.5s delay. Passing sets a signed `browser_verified` cookie (Secure, HttpOnly, SameSite=Strict, 30 min). `pwcreate.php` requires the cookie on both the form GET and the creation POST. Blocks curl, scanners, and blind form-POST bots; no CAPTCHA, no sessions, no stored tokens.
 - **Honeypot anti-spam** — the create form includes an off-screen, JS-hidden field real humans never fill; any value there returns HTTP 403 before anything is stored.
 - **Rolling decrypt animation** — the revealed secret resolves left-to-right through random characters over ~2 seconds, with a synced progress bar.
 - **Copy button** — icon+text `Copy` button that flips to a checkmark `Copied` for 3 seconds. On the created-link page the link is auto-copied on load (with a graceful "use the Copy button" fallback when the browser blocks clipboard access).
@@ -96,6 +98,7 @@ See `pw1time.json.example` for a full example.
 ## Deployment summary
 
 - PHP 8.x, PHP-FPM.
-- Place `pw1time.php`, `pwcreate.php`, and `logo-extra.png` in `public_html/`.
+- Place `index.php`, `pw1time.php`, `pwcreate.php`, and `logo-extra.png` in `public_html/`.
 - Keep `pw1time.json` one level above `public_html/` (path is `dirname(__DIR__) . '/pw1time.json'`), owned by the FPM user, mode `600`.
+- The gate secret (`.gate-secret`) is auto-generated on first hit at the same level, mode `600`; pre-create it with `php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"` for a known value.
 - Own the `.php` files `700` to the FPM user.
