@@ -17,6 +17,7 @@ Produces links like `https://pw1time.presswizards.com/pw1time.php?key=<32-hex>`.
 - **Email-scanner safe** — a plain GET on a link only shows a confirmation page; it never consumes the secret, so link previews / security scanners can't burn it.
 - **PRG (Post/Redirect/Get)** — the create and reveal flows redirect after POST, so refreshing never re-submits and never shows a browser "resubmit form" prompt.
 - **Browser verification gate** — `index.php` issues a stateless HMAC-signed challenge (token + 5-min expiry) that real-browser JS submits after capability checks (DOM, Web Crypto, cookies, screen) and a ~1.5s delay. Passing sets a signed `browser_verified` cookie (Secure, HttpOnly, SameSite=Strict, 30 min). `pwcreate.php` requires the cookie on both the form GET and the creation POST. Blocks curl, scanners, and blind form-POST bots; no CAPTCHA, no sessions, no stored tokens.
+- **Zero-knowledge encryption** — secrets are encrypted in the browser with AES-256-GCM (Web Crypto, random 256-bit key + 12-byte IV per secret) before sending. The server stores only ciphertext + IV and never sees plaintext or the key. The key travels in the URL fragment (`?key=ID#KEY`), which browsers never send to the server, and is never stored in cookies/localStorage/sessionStorage. Legacy plaintext records keep working unchanged.
 - **Honeypot anti-spam** — the create form includes an off-screen, JS-hidden field real humans never fill; any value there returns HTTP 403 before anything is stored.
 - **Rolling decrypt animation** — the revealed secret resolves left-to-right through random characters over ~2 seconds, with a synced progress bar.
 - **Copy button** — icon+text `Copy` button that flips to a checkmark `Copied` for 3 seconds. On the created-link page the link is auto-copied on load (with a graceful "use the Copy button" fallback when the browser blocks clipboard access).
@@ -24,18 +25,17 @@ Produces links like `https://pw1time.presswizards.com/pw1time.php?key=<32-hex>`.
 
 ## How it works
 
-### Create (`pwcreate.php`)
+### Create (`pwcreate.php`, requires the gate cookie)
 
-1. POST the secret value.
-2. `storeValue()` locks `pw1time.json` (exclusive `flock`), purges any entries older than 10 days, rejects the request if the vault is at the 500 cap, then writes `{ "<32-hex-key>": { "value": ..., "ts": <unix-time> } }`.
-3. A one-time `.pending/<key>` marker is written.
-4. `303` redirect to `?created=<key>` — the link page consumes the marker and renders the link exactly once; any later visit shows the form again.
+1. Browser generates an AES-256-GCM key + IV, encrypts the secret, and POSTs only `enc` + `iv` (base64url) to `?action=store`. Plaintext submissions are rejected.
+2. `storeCipher()` locks `pw1time.json`, purges expired entries, enforces the 500 cap, then writes `{ "<32-hex-key>": { "enc": ..., "iv": ..., "ts": <unix-time> } }`, and returns the key as JSON.
+3. The browser navigates to `?created=<key>#<decryption-key>` (fragment never touches the server). A one-time `.pending/<key>` marker is consumed on first view, so the full link renders exactly once.
 
-### Reveal (`pw1time.php`)
+### Reveal (`pw1time.php`, ungated by design)
 
-5. GET `?key=...` — key regex-checked (`/^[a-f0-9]{32,128}$/i`) against path/URL use, then the vault is read to confirm the key exists. *Not* consumed (email scanners get no side effects).
-6. POST confirmation — the file is locked, expired entries are purged, the entry is removed from the JSON and its value is stashed to `.revealed/<key>`.
-7. `303` redirect to `?key=...&revealed=1` — the stash is read, displayed once via the animation, then deleted. A reload shows "Invalid URL" (HTTP 404).
+5. GET `?key=...#...` — the fragment never reaches the server. The confirm page captures it into a JS variable, strips it from the visible URL, and warns if an encrypted record's link arrived without one. Key regex-checked, vault read-only (email-scanner safe).
+6. Reveal click — the browser fetch-POSTs the confirmation (`?action=reveal`), the entry is removed under lock and stashed to `.revealed/<key>` (tagged `ENC1:` envelope for ciphertext, raw text for legacy), and the browser navigates itself to `?key=...&revealed=1#...`, re-attaching the fragment client-side. Plain form POSTs still get the classic 303.
+7. `?revealed=1` — the stash is read, displayed, then deleted. Encrypted stashes are decrypted in-browser (AES-GCM with the fragment key) and animated; legacy stashes render as before. Reload → 404.
 
 Concurrency is handled with exclusive file locks; `pw1time.json` must be writable by the PHP-FPM user.
 
@@ -62,25 +62,31 @@ Expires: 0
 
 Notes:
 
-- `connect-src 'none'` — the app makes no `fetch`/XHR calls (the clipboard API is unaffected).
+- `connect-src 'self'` — the create and reveal pages use `fetch()` to same-origin endpoints (encrypted store, fragment-preserving reveal); no third-party calls. The clipboard API is unaffected.
 - `frame-ancestors 'none'` — clickjacking protection.
 - `Referrer-Policy: no-referrer` — the one-time link carries the secret key in the query string; this stops it leaking via the `Referer` header.
 - `no-store` — keeps the reveal page out of the back/forward cache.
 
 ## Data model
 
-`pw1time.json` is a flat object keyed by the secret key (32–128 hex chars):
+`pw1time.json` is a flat object keyed by the secret key (32–128 hex chars). New entries are zero-knowledge ciphertext; legacy plaintext entries keep working and are never migrated:
 
 ```json
 {
     "cf8120a47e724c34a92cbba913bf9321": {
-        "value": "the secret text",
+        "enc": "base64url AES-256-GCM ciphertext (plaintext + 16-byte tag)",
+        "iv": "base64url 12-byte nonce",
         "ts": 1789796835
+    },
+    "legacy-example-key": {
+        "value": "the secret text (pre-encryption format, still readable)",
+        "ts": 1789796000
     }
 }
 ```
 
-- `value` — the stored secret (max 4000 bytes).
+- `value` — the stored secret (legacy format only, max 4000 bytes).
+- `enc` / `iv` — AES-256-GCM ciphertext + nonce, base64url (current format; server validates ≤4096 ct bytes / exactly 12 iv bytes and rejects plaintext).
 - `ts` — unix timestamp of creation; entries older than 10 days (`ENTRY_TTL = 10 * 86400`) are purged.
 - Legacy plain-string values (pre-timestamp format) are still readable and are never treated as expired.
 
@@ -90,8 +96,8 @@ See `pw1time.json.example` for a full example.
 
 | Limit | Value | Where enforced |
 |---|---|---|
-| Secret length | 4000 bytes max | `pwcreate.php` POST handler |
-| Entries | 500 max | `storeValue()` in `pwcreate.php` |
+| Secret length | 4000 bytes plaintext max (enforced in-browser; server caps ciphertext at 4096 bytes) | create form JS + `pwcreate.php` POST handler |
+| Entries | 500 max | `storeCipher()` in `pwcreate.php` |
 | Expiry | 10 days | `ENTRY_TTL` constant, pruned on every create/reveal |
 | Key format | `/^[a-f0-9]{32,128}$/i` | both scripts, before any path/URL use |
 

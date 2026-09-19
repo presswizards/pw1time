@@ -10,7 +10,7 @@ declare(strict_types=1);
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 
@@ -45,6 +45,22 @@ if ($revealed) {
         invalid();
     }
 
+    /*
+     * Backward compatibility: an encrypted stash is tagged ENC1: and
+     * carries a JSON envelope {enc, iv} for browser-side decryption;
+     * anything else is a legacy plaintext record shown with the
+     * original behavior. The tag removes any ambiguity with a legacy
+     * secret that merely happens to look like JSON.
+     */
+    if (str_starts_with($value, 'ENC1:')) {
+        $envelope = json_decode(substr($value, 5), true);
+        if (is_array($envelope) && isset($envelope['enc'], $envelope['iv'])
+            && is_string($envelope['enc']) && is_string($envelope['iv'])) {
+            showCipher($envelope['enc'], $envelope['iv']);
+        }
+        invalid();
+    }
+
     showValue($value);
 }
 
@@ -61,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         invalid();
     }
 
-    showConfirmation($key);
+    showConfirmation($key, entryCipher($data[$key]) !== null);
 }
 
 /*
@@ -105,7 +121,17 @@ if (!array_key_exists($key, $data)) {
     invalid();
 }
 
-$value = entryValue($data[$key]);
+$entry = $data[$key];
+$cipher = entryCipher($entry);
+
+/*
+ * Encrypted records stash a tagged envelope for browser-side
+ * decryption; legacy records stash plaintext for the original
+ * reveal behavior. Existing records are never modified.
+ */
+$stashPayload = $cipher !== null
+    ? 'ENC1:' . json_encode(['enc' => $cipher['enc'], 'iv' => $cipher['iv']], JSON_UNESCAPED_SLASHES)
+    : entryValue($entry);
 unset($data[$key]);
 
 $newJson = encodeVault($data);
@@ -144,11 +170,22 @@ if (!$sfp) {
     invalid();
 }
 
-if (flock($sfp, LOCK_EX) && fwrite($sfp, $value) !== false) {
+if (flock($sfp, LOCK_EX) && fwrite($sfp, $stashPayload) !== false) {
     fflush($sfp);
     flock($sfp, LOCK_UN);
 }
 fclose($sfp);
+
+/*
+ * Browser fetch flow (used to preserve the URL-fragment decryption
+ * key across the redirect): answer JSON so the browser can navigate
+ * itself and re-attach the fragment. Plain form posts keep the 303.
+ */
+if (($_GET['action'] ?? '') === 'reveal') {
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'goto' => '/pw1time.php?key=' . $key . '&revealed=1']);
+    exit;
+}
 
 header(
     'Location: /pw1time.php?key=' . urlencode($key) . '&revealed=1',
@@ -217,6 +254,22 @@ function entryValue(mixed $entry): string
     }
 
     return is_string($entry) ? $entry : '';
+}
+
+
+/*
+ * Extract ciphertext + IV from a zero-knowledge entry, or null for
+ * legacy plaintext entries. Detection is structural (array keys),
+ * so existing records are never reinterpreted or migrated.
+ */
+function entryCipher(mixed $entry): ?array
+{
+    if (is_array($entry) && isset($entry['enc'], $entry['iv'])
+        && is_string($entry['enc']) && is_string($entry['iv'])) {
+        return ['enc' => $entry['enc'], 'iv' => $entry['iv']];
+    }
+
+    return null;
 }
 
 
@@ -335,10 +388,20 @@ HTML;
 }
 
 
-function showConfirmation(string $key): never
+function showConfirmation(string $key, bool $isEncrypted): never
 {
     $key = htmlspecialchars($key, ENT_QUOTES, 'UTF-8');
 
+    $keyWarning = '';
+    if ($isEncrypted) {
+        $keyWarning = <<<HTML
+    <p class="key-warning" id="key-warning" style="display:none">
+        This link is missing its decryption key (the part after #).
+        Revealing now will permanently destroy a secret you cannot read.
+        Ask the sender for the complete link.
+    </p>
+HTML;
+    }
     echo <<<HTML
 <!doctype html>
 <html lang="en">
@@ -426,6 +489,35 @@ button:hover {
     transform: translateY(-1px);
     box-shadow: 0 0 25px rgba(44,255,198,.22);
 }
+
+button:disabled {
+    opacity: .55;
+    cursor: wait;
+}
+
+.error {
+    margin: 20px 0 0;
+    padding: 10px 12px;
+    text-align: center;
+    border: 1px solid #8c4a3f;
+    border-radius: 8px;
+    background: rgba(140,74,63,.12);
+    color: #ffb4a8;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.key-warning {
+    margin: 0 0 20px;
+    padding: 10px 12px;
+    text-align: center;
+    border: 1px solid #8c6a3f;
+    border-radius: 8px;
+    background: rgba(140,106,63,.12);
+    color: #ffd9a8;
+    font-size: 13px;
+    line-height: 1.5;
+}
 </style>
 </head>
 
@@ -442,10 +534,66 @@ button:hover {
         Once revealed, it will be permanently deleted.
     </p>
 
-    <form method="post" action="?key={$key}">
-        <button type="submit">Reveal Secure Information</button>
+    {$keyWarning}
+
+    <form method="post" action="?key={$key}" id="reveal-form">
+        <button type="submit" id="reveal-btn">Reveal Secure Information</button>
     </form>
+
+    <p class="error" id="reveal-error" style="display:none"></p>
 </div>
+
+<script>
+/*
+ * The decryption key lives in the URL fragment (#...), which the
+ * browser never sends to the server. Capture it immediately, then
+ * strip it from the visible URL. The reveal POST goes out via fetch
+ * so this script can re-attach the fragment when navigating to the
+ * revealed page -- a plain form POST + server redirect would drop it.
+ * The key is kept only in this variable: never sent, never stored.
+ */
+(function () {
+    const frag = window.location.hash ? window.location.hash.slice(1) : '';
+    try {
+        history.replaceState(null, '', location.pathname + location.search);
+    } catch (err) { /* cosmetic only */ }
+
+    const form = document.getElementById('reveal-form');
+    const btn = document.getElementById('reveal-btn');
+    const errBox = document.getElementById('reveal-error');
+    const keyWarning = document.getElementById('key-warning');
+    const keyOk = /^[A-Za-z0-9\-_]{43}$/.test(frag);
+
+    if (keyWarning && !keyOk) {
+        keyWarning.style.display = 'block';
+    }
+
+    form.addEventListener('submit', async function (ev) {
+        ev.preventDefault();
+        errBox.style.display = 'none';
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('?key={$key}&action=reveal', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' }
+            });
+            const data = await res.json().catch(function () { return null; });
+
+            if (!res.ok || !data || data.ok !== true || typeof data.goto !== 'string') {
+                throw new Error((data && data.error) ? data.error : ('http-' + res.status));
+            }
+
+            /* Re-attach the fragment client-side: the server never sees it. */
+            window.location.href = data.goto + (frag ? '#' + frag : '');
+        } catch (err) {
+            errBox.textContent = 'Reveal failed (' + err.message + '). You can try again unless the link now reports invalid, which means it was already consumed.';
+            errBox.style.display = 'block';
+            btn.disabled = false;
+        }
+    });
+})();
+</script>
 
 </body>
 </html>
@@ -930,6 +1078,612 @@ function animate(now) {
 requestAnimationFrame(
     animate
 );
+
+
+const btnMarkup = {
+    copy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+        'stroke-linejoin="round" style="display:block;margin:0 auto;">' +
+        '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>' +
+        '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>' +
+        '</svg> Copy',
+    copied: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+        'stroke-linejoin="round" style="display:block;margin:0 auto;">' +
+        '<polyline points="20 6 9 17 4 12"></polyline></svg>' +
+        ' Copied'
+};
+
+const done =
+    document.getElementById('done');
+
+
+function flashCopied(message) {
+    copy.innerHTML = btnMarkup.copied;
+    done.textContent = message;
+    setTimeout(function () {
+        copy.innerHTML = btnMarkup.copy;
+        done.textContent = '';
+    }, 3000);
+}
+
+
+copy.addEventListener(
+    'click',
+    () => {
+        try {
+            navigator.clipboard.writeText(secret);
+        } catch (err) {
+            const ta = document.createElement('textarea');
+            ta.value = secret;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        }
+        flashCopied('Copied to clipboard');
+    }
+);
+
+</script>
+
+</body>
+</html>
+HTML;
+
+    exit;
+}
+
+
+function showCipher(string $enc, string $iv): never
+{
+    /*
+     * The page carries ciphertext + IV only. The AES key arrives in
+     * the URL fragment, which the browser never sent to the server.
+     * Decrypt locally, then run the same reveal animation on the
+     * recovered plaintext. Failures show an error -- never plaintext,
+     * never the ciphertext as if it were the secret.
+     */
+    $jsCipher = json_encode(
+        ['enc' => $enc, 'iv' => $iv],
+        JSON_HEX_TAG |
+        JSON_HEX_AMP |
+        JSON_HEX_APOS |
+        JSON_HEX_QUOT
+    );
+
+    echo <<<HTML
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<title>Secure Information</title>
+
+<style>
+
+@view-transition {
+    navigation: auto;
+}
+
+html {
+    background: #080b10;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background:
+        radial-gradient(circle at 50% 40%, #10282a 0, #080b10 48%);
+
+    color: #fff;
+
+    font-family:
+        system-ui,
+        -apple-system,
+        sans-serif;
+}
+
+.modal {
+    position: relative;
+
+    width: min(620px, calc(100% - 40px));
+
+    padding: 42px;
+
+    background: rgba(14,20,27,.97);
+
+    border: 1px solid #26333b;
+
+    border-radius: 18px;
+
+    box-shadow:
+        0 25px 80px rgba(0,0,0,.55),
+        0 0 70px rgba(44,255,198,.06);
+
+    overflow: hidden;
+
+    animation: modalIn .45s ease-out;
+}
+
+@keyframes modalIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(.98);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 24px;
+}
+
+.status-dot {
+    width: 9px;
+    height: 9px;
+
+    background: #2cffc6;
+
+    border-radius: 50%;
+
+    box-shadow:
+        0 0 12px #2cffc6;
+}
+
+.status {
+    color: #2cffc6;
+
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        monospace;
+
+    font-size: 12px;
+
+    letter-spacing: 1.5px;
+}
+
+h2 {
+    margin: 0 0 8px;
+
+    font-size: 25px;
+}
+
+.subtitle {
+    margin: 0 0 25px;
+
+    color: #8995a5;
+
+    font-size: 14px;
+}
+
+.secret-box {
+    position: relative;
+
+    min-height: 100px;
+
+    display: flex;
+    align-items: center;
+
+    padding: 22px;
+
+    background: #090d12;
+
+    border: 1px solid #26343b;
+
+    border-radius: 10px;
+
+    overflow: hidden;
+}
+
+.secret {
+    width: 100%;
+
+    color: #2cffc6;
+
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+
+    font-size: 16px;
+
+    line-height: 1.6;
+
+    white-space: pre-wrap;
+    word-break: break-word;
+
+    text-shadow:
+        0 0 12px rgba(44,255,198,.25);
+}
+
+.secret-error {
+    color: #ffb4a8;
+    text-shadow: none;
+}
+
+/*
+ * Scanner beam
+ */
+.scan {
+    position: absolute;
+
+    left: 0;
+    right: 0;
+
+    height: 2px;
+
+    background: #2cffc6;
+
+    box-shadow:
+        0 0 18px #2cffc6;
+
+    animation: scan 1.25s ease-in-out forwards;
+}
+
+@keyframes scan {
+
+    0% {
+        top: 0;
+        opacity: 0;
+    }
+
+    10% {
+        opacity: 1;
+    }
+
+    90% {
+        opacity: 1;
+    }
+
+    100% {
+        top: 100%;
+        opacity: 0;
+    }
+}
+
+.progress {
+    height: 2px;
+
+    margin-top: 15px;
+
+    background: #182027;
+
+    overflow: hidden;
+
+    border-radius: 2px;
+}
+
+.progress-bar {
+    height: 100%;
+
+    width: 0;
+
+    background: #2cffc6;
+
+    box-shadow:
+        0 0 10px rgba(44,255,198,.7);
+
+    animation: progress 2s ease-out forwards;
+}
+
+@keyframes progress {
+    to {
+        width: 100%;
+    }
+}
+
+.copy-row {
+    margin-top: 16px;
+    display: flex;
+    justify-content: center;
+}
+
+.notice {
+    margin-top: 20px;
+    color: #778391;
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+.copy {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 12px;
+    border: 1px solid #2cffc6;
+    border-radius: 7px;
+    background: transparent;
+    color: #2cffc6;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.copy:hover {
+    background: #2cffc6;
+    color: #07110e;
+}
+
+.done {
+    margin: 18px 0 0;
+    color: #2cffc6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-align: center;
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="modal">
+<center><img src="logo-extra.png" height="50" style="max-width:225px;display:block;border:none;margin:0 auto 24px;filter:drop-shadow(1px 0 0 gray) drop-shadow(-1px 0 0 gray) drop-shadow(0 1px 0 gray) drop-shadow(0 -1px 0 gray);" alt="Watchdog Studio"></center><br>
+
+    <div class="header">
+        <div class="status-dot"></div>
+        <div class="status" id="status">
+            DECRYPTING
+        </div>
+    </div>
+
+    <h2>Secure Information</h2>
+
+    <p class="subtitle">
+        One-time secure reveal
+    </p>
+
+    <div class="secret-box">
+
+        <div class="scan"></div>
+
+        <div
+            class="secret"
+            id="secret"
+        ></div>
+
+    </div>
+
+    <div class="progress">
+        <div class="progress-bar"></div>
+    </div>
+
+    <div class="copy-row">
+
+        <button
+            class="copy"
+            id="copy"
+            type="button"
+            title="Copy"
+            style="visibility:hidden"
+        >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round"
+                 style="display:block;">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2-2v1"></path>
+            </svg>
+            Copy
+        </button>
+
+    </div>
+
+    <p class="notice">
+        This information has been permanently deleted
+        from the server.
+    </p>
+
+    <div class="done" id="done"></div>
+
+</div>
+
+
+<script>
+
+const cipher = {$jsCipher};
+
+const display =
+    document.getElementById('secret');
+
+const status =
+    document.getElementById('status');
+
+const copy =
+    document.getElementById('copy');
+
+
+const chars =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZ' +
+    'abcdefghijklmnopqrstuvwxyz' +
+    '0123456789!@#$%^&*';
+
+
+const duration = 2000;
+
+let secret = '';
+let start = 0;
+
+
+function randomChar() {
+
+    return chars[
+        Math.floor(
+            Math.random() * chars.length
+        )
+    ];
+
+}
+
+
+function animate(now) {
+
+    const elapsed =
+        now - start;
+
+    const progress =
+        Math.min(
+            elapsed / duration,
+            1
+        );
+
+    /*
+     * Characters resolve from
+     * left to right.
+     */
+    const resolved =
+        Math.floor(
+            secret.length * progress
+        );
+
+    let output = '';
+
+    for (
+        let i = 0;
+        i < secret.length;
+        i++
+    ) {
+
+        if (secret[i] === '\\n') {
+
+            output += '\\n';
+
+        } else if (i < resolved) {
+
+            output += secret[i];
+
+        } else {
+
+            output += randomChar();
+
+        }
+
+    }
+
+    display.textContent = output;
+
+
+    if (progress < 1) {
+
+        requestAnimationFrame(
+            animate
+        );
+
+    } else {
+
+        display.textContent =
+            secret;
+
+        status.textContent =
+            'DECRYPTED • DESTROYED';
+
+        copy.style.visibility =
+            'visible';
+
+    }
+
+}
+
+
+function fail(message) {
+    display.textContent = message;
+    display.classList.add('secret-error');
+    status.textContent = 'DECRYPTION FAILED';
+}
+
+
+function b64urlDecode(s) {
+    const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) {
+        bytes[i] = bin.charCodeAt(i);
+    }
+    return bytes.buffer;
+}
+
+
+async function boot() {
+    /*
+     * Capture the key first, then strip it from the visible URL.
+     * The key lives only in this closure: never sent, never stored.
+     */
+    const frag = window.location.hash ? window.location.hash.slice(1) : '';
+    try {
+        history.replaceState(null, '', location.pathname + location.search);
+    } catch (err) { /* cosmetic only */ }
+
+    if (!window.crypto || !window.crypto.subtle) {
+        fail('Web Crypto is unavailable in this browser, so this secret cannot be decrypted.');
+        return;
+    }
+
+    if (!/^[A-Za-z0-9\-_]{43}$/.test(frag)) {
+        fail('This link is missing its decryption key (the part after #). Ask the sender for the complete link. The secret on the server was already destroyed when revealed.');
+        return;
+    }
+
+    let key;
+    try {
+        key = await window.crypto.subtle.importKey(
+            'raw',
+            b64urlDecode(frag),
+            { name: 'AES-GCM' },
+            false,
+            ['decrypt']
+        );
+    } catch (err) {
+        fail('The decryption key in this link is malformed.');
+        return;
+    }
+
+    let plain;
+    try {
+        plain = await window.crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: new Uint8Array(b64urlDecode(cipher.iv)) },
+            key,
+            b64urlDecode(cipher.enc)
+        );
+    } catch (err) {
+        fail('Decryption failed. The link key does not match this secret, or the data is corrupt.');
+        return;
+    }
+
+    secret = new TextDecoder().decode(plain);
+    start = performance.now();
+
+    requestAnimationFrame(
+        animate
+    );
+}
+
+
+boot();
 
 
 const btnMarkup = {

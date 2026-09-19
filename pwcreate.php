@@ -9,7 +9,7 @@ declare(strict_types=1);
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 header('Pragma: no-cache');
 header('Expires: 0');
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: no-referrer');
 
@@ -73,12 +73,16 @@ if ($gateSecret === '' || !gateCookieValid($gateSecret)) {
 }
 
 /*
- * POST: store a secret under a freshly generated key, then redirect (PRG)
- * so a reload never re-submits the form.
+ * POST: store a ciphertext under a freshly generated key, then either
+ * return the key as JSON (browser fetch flow) or redirect (PRG) so a
+ * reload never re-submits the form.
+ *
+ * Zero-knowledge: the browser encrypts with AES-256-GCM before sending.
+ * The server only ever sees base64url ciphertext + IV. Plaintext
+ * submissions are rejected -- there is no plaintext fallback.
  */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $value = (string) ($_POST['value'] ?? '');
-    $value = trim($value);
+    $wantsJson = (($_GET['action'] ?? '') === 'store');
 
     /*
      * Honeypot: a JS-hidden field real humans never fill.
@@ -90,15 +94,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    if ($value === '') {
-        diePage(renderForm('<em>Please enter a value to store.</em>'));
+    $enc = (string) ($_POST['enc'] ?? '');
+    $iv = (string) ($_POST['iv'] ?? '');
+
+    $b64url = '/^[A-Za-z0-9\-_]+$/';
+    $ctBytes = false;
+    $ivBytes = false;
+    if ($enc !== '' && $iv !== '' && preg_match($b64url, $enc) && preg_match($b64url, $iv)
+        && strlen($enc) <= 5500 && strlen($iv) <= 20) {
+        $ctBytes = base64_decode(strtr($enc, '-_', '+/'), true);
+        $ivBytes = base64_decode(strtr($iv, '-_', '+/'), true);
     }
 
-    if (strlen($value) > 4000) {
-        diePage(renderForm('<em>Value is too long (max 4000 characters).</em>'));
+    /*
+     * Ciphertext is plaintext + 16-byte GCM tag; plaintext is capped at
+     * 4000 bytes client-side, so valid ciphertext is 17..4016 bytes and
+     * the IV is exactly the 12-byte GCM nonce.
+     */
+    $valid = is_string($ctBytes) && is_string($ivBytes)
+        && strlen($ctBytes) >= 17 && strlen($ctBytes) <= 4096
+        && strlen($ivBytes) === 12;
+
+    if (!$valid) {
+        $msg = '<em>Secrets must be encrypted in your browser before sending. Please enable JavaScript and try again.</em>';
+        if ($wantsJson) {
+            http_response_code(400);
+            header('Content-Type: application/json');
+            echo json_encode(['ok' => false, 'error' => 'invalid-encryption-payload']);
+            exit;
+        }
+        diePage(renderForm($msg));
     }
 
-    $key = storeValue($jsonFile, $value);
+    [$stored, $keyOrError, $httpCode] = storeCipher($jsonFile, $enc, $iv);
+
+    if (!$stored) {
+        if ($wantsJson) {
+            http_response_code($httpCode);
+            header('Content-Type: application/json');
+            echo json_encode(['ok' => false, 'error' => $keyOrError]);
+            exit;
+        }
+        $friendly = $keyOrError === 'vault-full'
+            ? 'Vault is full (500 entries max). Please retry later.'
+            : 'The vault is busy. Please try again.';
+        diePage(renderForm('<em>' . htmlspecialchars($friendly, ENT_QUOTES, 'UTF-8') . '</em>'));
+    }
+    $key = $keyOrError;
 
     /*
      * One-time marker so the generated link is shown exactly once;
@@ -108,6 +150,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         @mkdir($pendingDir, 0700, true);
     }
     @file_put_contents($pendingDir . '/' . $key, (string) time(), LOCK_EX);
+
+    if ($wantsJson) {
+        header('Content-Type: application/json');
+        echo json_encode(['ok' => true, 'key' => $key]);
+        exit;
+    }
 
     header('Location: ' . ($_SERVER['SCRIPT_NAME'] ?? '/pwcreate.php') . '?created=' . $key, true, 303);
     exit;
@@ -133,7 +181,11 @@ diePage(renderForm(''));
  * Functions
  * ---------------------------------------------------------- */
 
-function storeValue(string $file, string $value): string
+/*
+ * Store AES-GCM ciphertext + IV under a fresh key.
+ * Returns [stored, key-or-error-slug, http-code].
+ */
+function storeCipher(string $file, string $enc, string $iv): array
 {
     $key = bin2hex(random_bytes(16)); // 32 hex chars, matches /^[a-f0-9]{32,128}$/i
 
@@ -143,7 +195,7 @@ function storeValue(string $file, string $value): string
         if ($fp) {
             fclose($fp);
         }
-        diePage(renderForm('<em>The vault is busy. Please try again.</em>'));
+        return [false, 'vault-busy', 503];
     }
 
     rewind($fp);
@@ -166,11 +218,13 @@ function storeValue(string $file, string $value): string
     if (count($data) >= MAX_ENTRIES) {
         flock($fp, LOCK_UN);
         fclose($fp);
-        diePage(renderForm('<em>Vault is full (500 entries max). Please retry later.</em>'));
+        return [false, 'vault-full', 429];
     }
 
+    /* Ciphertext only -- the server never sees plaintext or the key. */
     $data[$key] = [
-        'value' => $value,
+        'enc' => $enc,
+        'iv' => $iv,
         'ts' => $now,
     ];
 
@@ -179,14 +233,24 @@ function storeValue(string $file, string $value): string
 
     fwrite(
         $fp,
-        json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL
+        encodeVault($data) . PHP_EOL
     );
 
     fflush($fp);
     flock($fp, LOCK_UN);
     fclose($fp);
 
-    return $key;
+    return [true, $key, 200];
+}
+
+function encodeVault(array $data): string
+{
+    $json = json_encode(
+        $data === [] ? (object) [] : $data,
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+    );
+
+    return $json === false ? '' : $json;
 }
 
 
@@ -407,6 +471,12 @@ button:hover {
     box-shadow: 0 0 25px rgba(44,255,198,.22);
 }
 
+button:disabled {
+    opacity: .55;
+    cursor: wait;
+    transform: none;
+}
+
 .error {
     margin: 0 0 16px;
     padding: 10px 12px;
@@ -455,20 +525,118 @@ button:hover {
 
     {$errorBlock}
 
-    <form method="post" action="pwcreate.php">
+    <form method="post" action="pwcreate.php" id="vault-form">
         <input type="text" name="company" id="company" class="company" tabindex="-1" autocomplete="off" aria-hidden="true">
-        <textarea name="value" placeholder="Secret value to store ..." autofocus required></textarea>
-        <button type="submit">Add To Vault</button>
+        <textarea name="value" id="secret-input" placeholder="Secret value to store ..." autofocus required></textarea>
+        <button type="submit" id="submit-btn">Add To Vault</button>
     </form>
+
+    <noscript><p class="form-hint">JavaScript is required: secrets are encrypted in your browser before sending.</p></noscript>
 
     <script>
         document.getElementById('company').style.display = 'none';
     </script>
 
+    <script>
+    /*
+     * Zero-knowledge creation: the secret is encrypted in this browser
+     * with AES-256-GCM before anything leaves the page. The server only
+     * ever receives ciphertext + IV. The encryption key never leaves
+     * this browser -- it travels in the link fragment (#...), which
+     * browsers never send to the server, and it is never stored in
+     * cookies, localStorage, or sessionStorage.
+     */
+    (function () {
+        const form = document.getElementById('vault-form');
+        const input = document.getElementById('secret-input');
+        const btn = document.getElementById('submit-btn');
+
+        function b64urlEncode(buf) {
+            const bytes = new Uint8Array(buf);
+            let bin = '';
+            for (let i = 0; i < bytes.length; i++) {
+                bin += String.fromCharCode(bytes[i]);
+            }
+            return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+
+        function showError(msg) {
+            let box = document.getElementById('client-error');
+            if (!box) {
+                box = document.createElement('div');
+                box.id = 'client-error';
+                box.className = 'error';
+                form.parentNode.insertBefore(box, form);
+            }
+            box.textContent = msg;
+            btn.disabled = false;
+            btn.textContent = 'Add To Vault';
+        }
+
+        form.addEventListener('submit', async function (ev) {
+            ev.preventDefault();
+
+            if (!window.crypto || !window.crypto.subtle) {
+                showError('Web Crypto is unavailable in this browser, so the secret cannot be encrypted. Nothing was sent.');
+                return;
+            }
+
+            const plaintext = input.value;
+            const plainBytes = new TextEncoder().encode(plaintext);
+            if (plainBytes.length === 0 || plainBytes.length > 4000) {
+                showError('Secret must be 1 to 4000 bytes.');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Encrypting…';
+
+            try {
+                const key = await window.crypto.subtle.generateKey(
+                    { name: 'AES-GCM', length: 256 },
+                    true,
+                    ['encrypt']
+                );
+                const iv = window.crypto.getRandomValues(new Uint8Array(12));
+                const ct = await window.crypto.subtle.encrypt(
+                    { name: 'AES-GCM', iv: iv },
+                    key,
+                    plainBytes
+                );
+                const rawKey = await window.crypto.subtle.exportKey('raw', key);
+
+                const body = new URLSearchParams();
+                body.set('enc', b64urlEncode(ct));
+                body.set('iv', b64urlEncode(iv.buffer));
+
+                const res = await fetch('pwcreate.php?action=store', {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json' },
+                    body: body
+                });
+                const data = await res.json().catch(function () { return null; });
+
+                if (!res.ok || !data || data.ok !== true || typeof data.key !== 'string') {
+                    const reason = (data && data.error) ? data.error : ('http-' + res.status);
+                    showError('Could not store the secret (' + reason + '). Nothing was stored in plaintext.');
+                    return;
+                }
+
+                /* Key travels in the fragment: never sent to the server. */
+                window.location.href = 'pwcreate.php?created=' + encodeURIComponent(data.key) + '#' + b64urlEncode(rawKey);
+            } catch (err) {
+                showError('Encryption failed. Nothing was sent.');
+            }
+        });
+    })();
+    </script>
+
     <p class="form-hint">
-        Every visit starts a fresh entry. Values are stored until
-        their one-time link is revealed, then permanently deleted.
-        Unrevealed links expire automatically after 10 days.
+        Your secret is encrypted in this browser before sending; the server
+        never sees it in readable form. Every visit starts a fresh entry.
+        Values are stored until their one-time link is revealed, then
+        permanently deleted. Unrevealed links expire automatically after
+        10 days.
     </p>
 </div>
 
@@ -698,8 +866,25 @@ h2 {
 const linkEl = document.getElementById('link');
 const copyBtn = document.getElementById('copy');
 const doneEl = document.getElementById('done');
+const noticeEl = document.getElementById('notice');
 
 const linkText = {$jsLink};
+
+/*
+ * The decryption key arrives in the URL fragment (#...), which the
+ * browser never sends to the server -- PHP rendered the link above
+ * without it. Complete the shareable link here, in this browser only.
+ */
+let fullLink = linkText;
+const frag = window.location.hash ? window.location.hash.slice(1) : '';
+if (/^[A-Za-z0-9\-_]{43}$/.test(frag)) {
+    fullLink = linkText + '#' + frag;
+    linkEl.textContent = fullLink;
+} else {
+    linkEl.textContent = 'Missing decryption key: this page was opened without the link fragment, so the complete link cannot be shown. Create the secret again.';
+    noticeEl.textContent = 'No link was stored or copied. Go back and create the secret again to get a complete link.';
+    copyBtn.style.display = 'none';
+}
 
 const btnMarkup = {
     copy: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
@@ -726,10 +911,10 @@ function flashCopied(message) {
 
 async function copyLink() {
     try {
-        await navigator.clipboard.writeText(linkText);
+        await navigator.clipboard.writeText(fullLink);
     } catch (err) {
         const ta = document.createElement('textarea');
-        ta.value = linkText;
+        ta.value = fullLink;
         document.body.appendChild(ta);
         ta.select();
         document.execCommand('copy');
