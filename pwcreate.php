@@ -495,6 +495,56 @@ button:disabled {
     line-height: 1.5;
 }
 
+.info-tip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-right: 8px;
+    border: 1px solid #56616f;
+    border-radius: 50%;
+    color: #8d98a8;
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 700;
+    cursor: help;
+    position: relative;
+    vertical-align: middle;
+}
+
+.info-tip:hover,
+.info-tip:focus {
+    color: #2cffc6;
+    border-color: #2cffc6;
+    outline: none;
+}
+
+.info-tip::after {
+    content: attr(data-tip);
+    display: none;
+    position: absolute;
+    bottom: 130%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 220px;
+    padding: 10px 12px;
+    background: #090d12;
+    border: 1px solid #26343b;
+    border-radius: 8px;
+    color: #8d98a8;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.5;
+    text-align: left;
+    z-index: 10;
+}
+
+.info-tip:hover::after,
+.info-tip:focus::after {
+    display: block;
+}
+
 .company {
     position: absolute;
     left: -9999px;
@@ -516,7 +566,7 @@ button:disabled {
         <div class="status">NEW SECRET</div>
     </div>
 
-    <h2>Add to Vault</h2>
+    <h2><span class="info-tip" tabindex="0" aria-label="About this vault's security" data-tip="Secrets are encrypted in your browser with AES-256-GCM before sending, so the server never sees them. Pages are never cached, visitors pass a JavaScript browser check, and bots are blocked by anti-spam controls.">i</span> Add to Vault</h2>
 
     <p>
         Enter the secret value to store.
@@ -636,7 +686,7 @@ button:disabled {
         never sees it in readable form. Every visit starts a fresh entry.
         Values are stored until their one-time link is revealed, then
         permanently deleted. Unrevealed links expire automatically after
-        10 days.
+        10 days. Maximum secret size is 4,000 characters.
     </p>
 </div>
 
