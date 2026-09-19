@@ -109,3 +109,4 @@ See `pw1time.json.example` for a full example.
 - The gate secret (`.gate-secret`) is auto-generated on first hit at the same level, mode `600`; pre-create it with `php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"` for a known value.
 - Own the `.php` files `700` to the FPM user.
 - If deploying via `git pull` as root, re-apply ownership afterward (`git checkout`/pull recreates files as root, which breaks PHP-FPM with a 500): `chown <fpm-user>:<fpm-user> *.php; chmod 700 *.php`.
+- `tests/` is repo-only tooling and must not be web-accessible: on git-clone deployments exclude it with `git sparse-checkout set --no-cone '/*' '!/tests/'` (future pulls keep working, `tests/` never materializes). Per-file `scp` deploys skip it naturally.
