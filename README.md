@@ -108,3 +108,4 @@ See `pw1time.json.example` for a full example.
 - Keep `pw1time.json` one level above `public_html/` (path is `dirname(__DIR__) . '/pw1time.json'`), owned by the FPM user, mode `600`.
 - The gate secret (`.gate-secret`) is auto-generated on first hit at the same level, mode `600`; pre-create it with `php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"` for a known value.
 - Own the `.php` files `700` to the FPM user.
+- If deploying via `git pull` as root, re-apply ownership afterward (`git checkout`/pull recreates files as root, which breaks PHP-FPM with a 500): `chown <fpm-user>:<fpm-user> *.php; chmod 700 *.php`.
