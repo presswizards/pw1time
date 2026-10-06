@@ -282,6 +282,7 @@ function renderForbidden(): string
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.png" type="image/png">
 <title>403 - Forbidden</title>
 
 <style>
@@ -371,6 +372,7 @@ function renderForm(string $error): string
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.png" type="image/png">
 <title>Add to Vault</title>
 
 <style>
@@ -1073,6 +1075,7 @@ function renderCreated(string $key): never
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.png" type="image/png">
 <title>Vault Link Created</title>
 
 <style>

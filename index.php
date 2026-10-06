@@ -81,6 +81,7 @@ function gateFail(string $message): never
     http_response_code(403);
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        . '<link rel="icon" href="favicon.png" type="image/png">'
         . '<title>Verification failed</title></head>'
         . '<body style="background:#0b0f14;color:#e8edf2;font-family:system-ui,sans-serif;'
         . 'display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">'
@@ -162,6 +163,7 @@ $jsSig = json_encode($sig, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HE
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.png" type="image/png">
 <title>Verify your browser</title>
 <style>
   body{background:#0b0f14;color:#e8edf2;font-family:system-ui,-apple-system,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}

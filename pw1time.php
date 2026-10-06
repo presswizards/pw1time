@@ -258,6 +258,7 @@ if (entryCipher($data[$key]) !== null) {
     http_response_code(400);
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         . '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        . '<link rel="icon" href="favicon.png" type="image/png">'
         . '<title>JavaScript required</title></head>'
         . '<body style="background:#0b0f14;color:#e8edf2;font-family:system-ui,sans-serif;'
         . 'display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0">'
@@ -469,6 +470,7 @@ function invalid(): never
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.png" type="image/png">
 <title>Invalid URL</title>
 
 <style>
@@ -551,6 +553,7 @@ HTML;
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.png" type="image/png">
 <title>Secure Information</title>
 
 <style>
@@ -1160,6 +1163,7 @@ function showValue(mixed $value): never
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.png" type="image/png">
 
 <title>Secure Information</title>
 
@@ -1689,6 +1693,7 @@ function showCipher(string $enc, string $iv): never
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.png" type="image/png">
 
 <title>Secure Information</title>
 
